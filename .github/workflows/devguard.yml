@@ -1,0 +1,13 @@
+# .github/workflows/devguard.yml
+name: DevGuard Workflow
+
+on:
+  push:
+ 
+jobs:
+  devguard-scanner:
+    uses: l3montree-dev/devguard-action/.github/workflows/full.yml@main
+    with:
+        asset-name: "l3montree-cybersecurity/projects/devguard/assets/devguard-operator"
+    secrets:
+        devguard-token: ${{ secrets.DEVGUARD_TOKEN }} 

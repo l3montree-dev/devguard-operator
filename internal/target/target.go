@@ -12,12 +12,21 @@ type TargetContext struct {
 	Sbom      string
 }
 
+type ImageInNamespace struct {
+	Namespace string
+	Image     *oci.RegistryImage
+}
+
+func (i ImageInNamespace) String() string {
+	return i.Namespace + "/" + i.Image.ImageID
+}
+
 type Target interface {
 	Initialize() error
 	ValidateConfig() error
 	ProcessSbom(ctx *TargetContext) error
-	LoadImages() []*oci.RegistryImage
-	Remove(images []*oci.RegistryImage)
+	LoadImages() ([]ImageInNamespace, error)
+	Remove(images []ImageInNamespace) error
 }
 
 func NewContext(sbom string, image *oci.RegistryImage, container *libk8s.ContainerInfo, pod *libk8s.PodInfo) *TargetContext {

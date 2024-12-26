@@ -6,16 +6,13 @@ import (
 	"syscall"
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
-	liboci "github.com/ckotzbauer/libk8soci/pkg/oci"
 	"github.com/ckotzbauer/sbom-operator/internal"
 	"github.com/ckotzbauer/sbom-operator/internal/job"
 	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
 	"github.com/ckotzbauer/sbom-operator/internal/syft"
 	"github.com/ckotzbauer/sbom-operator/internal/target"
-	"github.com/ckotzbauer/sbom-operator/internal/target/configmap"
-	"github.com/ckotzbauer/sbom-operator/internal/target/dtrack"
-	"github.com/ckotzbauer/sbom-operator/internal/target/git"
-	"github.com/ckotzbauer/sbom-operator/internal/target/oci"
+	"github.com/ckotzbauer/sbom-operator/internal/target/devguard"
+
 	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/tools/cache"
 
@@ -52,13 +49,14 @@ func (p *Processor) ListenForPods() {
 			var removedContainers []*libk8s.ContainerInfo
 			newInfo.Containers, removedContainers = getChangedContainers(oldInfo, newInfo)
 			p.scanPod(newInfo)
-			p.cleanupImagesIfNeeded(removedContainers, informer.GetStore().List())
+
+			p.cleanupImagesIfNeeded(newInfo.PodNamespace, removedContainers, informer.GetStore().List())
 		},
 		DeleteFunc: func(obj interface{}) {
 			pod := obj.(*corev1.Pod)
 			info := p.K8s.Client.ExtractPodInfos(*pod)
 			logrus.Tracef("Pod %s/%s was removed.", info.PodNamespace, info.PodName)
-			p.cleanupImagesIfNeeded(info.Containers, informer.GetStore().List())
+			p.cleanupImagesIfNeeded(info.PodNamespace, info.Containers, informer.GetStore().List())
 		},
 	})
 
@@ -70,7 +68,7 @@ func (p *Processor) ListenForPods() {
 	p.runInformerAsync(informer)
 }
 
-func (p *Processor) ProcessAllPods(pods []libk8s.PodInfo, allImages []*liboci.RegistryImage) {
+func (p *Processor) ProcessAllPods(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
 	if !HasJobImage() {
 		p.executeSyftScans(pods, allImages)
 	} else {
@@ -113,47 +111,8 @@ func initTargets(k8s *kubernetes.KubeClient) []target.Target {
 	for _, ta := range internal.OperatorConfig.Targets {
 		var err error
 
-		if ta == "git" {
-			workingTree := internal.OperatorConfig.GitWorkingTree
-			workPath := internal.OperatorConfig.GitPath
-			repository := internal.OperatorConfig.GitRepository
-			branch := internal.OperatorConfig.GitBranch
-			format := internal.OperatorConfig.Format
-			token := internal.OperatorConfig.GitAccessToken
-			userName := internal.OperatorConfig.GitUserName
-			password := internal.OperatorConfig.GitPassword
-			name := internal.OperatorConfig.GitAuthorName
-			email := internal.OperatorConfig.GitAuthorEmail
-			githubAppId := internal.OperatorConfig.GitHubAppId
-			githubAppInstallationId := internal.OperatorConfig.GitHubAppInstallationId
-			githubAppPrivateKey := internal.OperatorConfig.GitHubPrivateKey
-			t := git.NewGitTarget(workingTree, workPath, repository, branch, name, email, token, userName, password, githubAppId, githubAppInstallationId, githubAppPrivateKey, format)
-			err = t.ValidateConfig()
-			targets = append(targets, t)
-		} else if ta == "dtrack" {
-			baseUrl := internal.OperatorConfig.DtrackBaseUrl
-			apiKey := internal.OperatorConfig.DtrackApiKey
-			podLabelTagMatcher := internal.OperatorConfig.DtrackLabelTagMatcher
-			parentProjectAnnotationKey := internal.OperatorConfig.DtrackParentProjectAnnotationKey
-			projectNameAnnotationKey := internal.OperatorConfig.DtrackProjectNameAnnotationKey
-			caCertFile := internal.OperatorConfig.DtrackCaCertFile
-			clientCertFile := internal.OperatorConfig.DtrackClientCertFile
-			clientKeyFile := internal.OperatorConfig.DtrackClientKeyFile
-			k8sClusterId := internal.OperatorConfig.KubernetesClusterId
-			t := dtrack.NewDependencyTrackTarget(baseUrl, apiKey, podLabelTagMatcher, caCertFile, clientCertFile, clientKeyFile, k8sClusterId, parentProjectAnnotationKey, projectNameAnnotationKey)
-			err = t.ValidateConfig()
-			targets = append(targets, t)
-		} else if ta == "oci" {
-			registry := internal.OperatorConfig.OciRegistry
-			username := internal.OperatorConfig.OciUser
-			token := internal.OperatorConfig.OciToken
-			format := internal.OperatorConfig.Format
-			t := oci.NewOciTarget(registry, username, token, format)
-			err = t.ValidateConfig()
-			targets = append(targets, t)
-		} else if ta == "configmap" {
-			t := configmap.NewConfigMapTarget(k8s)
-			err = t.ValidateConfig()
+		if ta == "devguard" {
+			t := devguard.NewDevGuardTarget(internal.OperatorConfig.DevGuardToken, internal.OperatorConfig.DevGuardApiURL, internal.OperatorConfig.DevGuardProjectID, nil)
 			targets = append(targets, t)
 		} else {
 			logrus.Fatalf("Unknown target %s", ta)
@@ -175,19 +134,25 @@ func HasJobImage() bool {
 	return internal.OperatorConfig.JobImage != ""
 }
 
-func (p *Processor) executeSyftScans(pods []libk8s.PodInfo, allImages []*liboci.RegistryImage) {
+func (p *Processor) executeSyftScans(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
 	for _, pod := range pods {
 		p.scanPod(pod)
 	}
 
 	for _, t := range p.Targets {
-		targetImages := t.LoadImages()
-		removableImages := make([]*liboci.RegistryImage, 0)
+		targetImages, err := t.LoadImages()
+
+		if err != nil {
+			logrus.WithError(err).Error("Failed to load images from target")
+			continue
+		}
+
+		removableImages := make([]target.ImageInNamespace, 0)
 		for _, t := range targetImages {
-			if !containsImage(allImages, t.ImageID) {
+			if !containsImage(allImages, t) {
 				removableImages = append(removableImages, t)
-				delete(p.imageMap, t.ImageID)
-				logrus.Debugf("Image %s marked for removal", t.ImageID)
+				delete(p.imageMap, t.String())
+				logrus.Debugf("Image %s marked for removal", t.String())
 			}
 		}
 
@@ -253,9 +218,9 @@ func getChangedContainers(oldPod, newPod libk8s.PodInfo) ([]*libk8s.ContainerInf
 	return addedContainers, removedContainers
 }
 
-func containsImage(images []*liboci.RegistryImage, image string) bool {
+func containsImage(images []target.ImageInNamespace, image target.ImageInNamespace) bool {
 	for _, i := range images {
-		if i.ImageID == image {
+		if i.Image.Image == i.Image.Image && i.Namespace == image.Namespace {
 			return true
 		}
 	}
@@ -273,8 +238,8 @@ func containsContainerImage(containers []*libk8s.ContainerInfo, image string) bo
 	return false
 }
 
-func (p *Processor) cleanupImagesIfNeeded(removedContainers []*libk8s.ContainerInfo, allPods []interface{}) {
-	images := make([]*liboci.RegistryImage, 0)
+func (p *Processor) cleanupImagesIfNeeded(namespace string, removedContainers []*libk8s.ContainerInfo, allPods []interface{}) {
+	images := make([]target.ImageInNamespace, 0)
 
 	for _, c := range removedContainers {
 		found := false
@@ -285,7 +250,7 @@ func (p *Processor) cleanupImagesIfNeeded(removedContainers []*libk8s.ContainerI
 		}
 
 		if !found {
-			images = append(images, c.Image)
+			images = append(images, target.ImageInNamespace{Namespace: namespace, Image: c.Image})
 			delete(p.imageMap, c.Image.ImageID)
 			logrus.Debugf("Image %s marked for removal", c.Image.ImageID)
 		}
@@ -343,16 +308,24 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 			logrus.Info("Finished cache sync")
 			pods := informer.GetStore().List()
 			missingPods := make([]libk8s.PodInfo, 0)
-			allImages := make([]*liboci.RegistryImage, 0)
+			allImages := make([]target.ImageInNamespace, 0)
 
 			for _, t := range p.Targets {
-				targetImages := t.LoadImages()
+				targetImages, err := t.LoadImages()
+				if err != nil {
+					logrus.WithError(err).Error("Failed to load images from target")
+					continue
+				}
+
 				for _, po := range pods {
 					pod := po.(*corev1.Pod)
 					info := p.K8s.Client.ExtractPodInfos(*pod)
 					for _, c := range info.Containers {
-						allImages = append(allImages, c.Image)
-						if !containsImage(targetImages, c.Image.ImageID) && !p.K8s.HasAnnotation(info.Annotations, c) {
+						allImages = append(allImages, target.ImageInNamespace{Namespace: info.PodNamespace, Image: c.Image})
+						if !containsImage(targetImages, target.ImageInNamespace{
+							Image:     c.Image,
+							Namespace: info.PodNamespace,
+						}) && !p.K8s.HasAnnotation(info.Annotations, c) {
 							missingPods = append(missingPods, info)
 							logrus.Debugf("Pod %s/%s needs to be analyzed", info.PodNamespace, info.PodName)
 							break
