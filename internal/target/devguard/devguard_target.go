@@ -76,6 +76,35 @@ func (g *DevGuardTarget) Initialize() error {
 	}
 
 	g.rootProjectID = rootProject["id"].(string)
+
+	// check if already marked as kubernetes cluster
+	if rootProject["type"].(string) != "kubernetesCluster" {
+		// update the project type
+		body := map[string]interface{}{
+			"type": "kubernetesCluster",
+		}
+
+		// to json
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+
+		req, err := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, g.rootProjectSlug), bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return err
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+
+		_, err = g.client.Do(req)
+		if err != nil {
+			return err
+		}
+
+		slog.Info("Updated root project to kubernetesCluster", "rootProjectSlug", g.rootProjectSlug)
+	}
+
 	return nil
 }
 
