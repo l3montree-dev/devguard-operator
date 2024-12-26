@@ -7,7 +7,6 @@ import (
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
 	"github.com/ckotzbauer/sbom-operator/internal"
-	"github.com/ckotzbauer/sbom-operator/internal/job"
 	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
 	"github.com/ckotzbauer/sbom-operator/internal/syft"
 	"github.com/ckotzbauer/sbom-operator/internal/target"
@@ -27,11 +26,7 @@ type Processor struct {
 }
 
 func New(k8s *kubernetes.KubeClient, sy *syft.Syft) *Processor {
-	targets := make([]target.Target, 0)
-	if !HasJobImage() {
-		logrus.Debugf("Targets set to: %v", internal.OperatorConfig.Targets)
-		targets = initTargets(k8s)
-	}
+	targets := initTargets(k8s)
 
 	return &Processor{K8s: k8s, sy: sy, Targets: targets, imageMap: make(map[string]bool)}
 }
@@ -69,11 +64,7 @@ func (p *Processor) ListenForPods() {
 }
 
 func (p *Processor) ProcessAllPods(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
-	if !HasJobImage() {
-		p.executeSyftScans(pods, allImages)
-	} else {
-		p.executeJobImage(pods)
-	}
+	p.executeSyftScans(pods, allImages)
 }
 
 func (p *Processor) scanPod(pod libk8s.PodInfo) {
@@ -108,19 +99,13 @@ func (p *Processor) scanPod(pod libk8s.PodInfo) {
 func initTargets(k8s *kubernetes.KubeClient) []target.Target {
 	targets := make([]target.Target, 0)
 
-	for _, ta := range internal.OperatorConfig.Targets {
-		var err error
+	var err error
 
-		if ta == "devguard" {
-			t := devguard.NewDevGuardTarget(internal.OperatorConfig.DevGuardToken, internal.OperatorConfig.DevGuardApiURL, internal.OperatorConfig.DevGuardProjectID, nil)
-			targets = append(targets, t)
-		} else {
-			logrus.Fatalf("Unknown target %s", ta)
-		}
+	t := devguard.NewDevGuardTarget(internal.OperatorConfig.DevGuardToken, internal.OperatorConfig.DevGuardApiURL, internal.OperatorConfig.DevGuardProjectID, nil)
+	targets = append(targets, t)
 
-		if err != nil {
-			logrus.WithError(err).Fatal("Config-Validation failed!")
-		}
+	if err != nil {
+		logrus.WithError(err).Fatal("Config-Validation failed!")
 	}
 
 	if len(targets) == 0 {
@@ -128,10 +113,6 @@ func initTargets(k8s *kubernetes.KubeClient) []target.Target {
 	}
 
 	return targets
-}
-
-func HasJobImage() bool {
-	return internal.OperatorConfig.JobImage != ""
 }
 
 func (p *Processor) executeSyftScans(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
@@ -156,46 +137,8 @@ func (p *Processor) executeSyftScans(pods []libk8s.PodInfo, allImages []target.I
 			}
 		}
 
-		if len(removableImages) > 0 && internal.OperatorConfig.DeleteOrphanImages {
+		if len(removableImages) > 0 {
 			t.Remove(removableImages)
-		}
-	}
-}
-
-func (p *Processor) executeJobImage(pods []libk8s.PodInfo) {
-	jobClient := job.New(
-		p.K8s,
-		internal.OperatorConfig.JobImage,
-		internal.OperatorConfig.JobImagePullSecret,
-		internal.OperatorConfig.KubernetesClusterId,
-		internal.OperatorConfig.JobTimeout)
-
-	filteredPods := make([]libk8s.PodInfo, 0)
-	for _, pod := range pods {
-		filteredContainers := make([]*libk8s.ContainerInfo, 0)
-		for _, container := range pod.Containers {
-			if p.K8s.HasAnnotation(pod.Annotations, container) {
-				logrus.Debugf("Skip image %s", container.Image.ImageID)
-				continue
-			}
-
-			filteredContainers = append(filteredContainers, container)
-		}
-
-		if len(filteredContainers) > 0 {
-			filteredPods = append(filteredPods, pod)
-		}
-	}
-
-	j, err := jobClient.StartJob(filteredPods)
-	if err != nil {
-		// Already handled from job-module
-		return
-	}
-
-	if jobClient.WaitForJob(j) {
-		for _, pod := range filteredPods {
-			p.K8s.UpdatePodAnnotation(pod)
 		}
 	}
 }
@@ -258,9 +201,7 @@ func (p *Processor) cleanupImagesIfNeeded(namespace string, removedContainers []
 
 	if len(images) > 0 {
 		for _, t := range p.Targets {
-			if internal.OperatorConfig.DeleteOrphanImages {
-				t.Remove(images)
-			}
+			t.Remove(images)
 		}
 	}
 }
@@ -283,12 +224,11 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 	}()
 
 	go func() {
-		if !HasJobImage() {
-			for _, t := range p.Targets {
-				err := t.Initialize()
-				if err != nil {
-					logrus.WithError(err).Fatal("Target could not be initialized,")
-				}
+
+		for _, t := range p.Targets {
+			err := t.Initialize()
+			if err != nil {
+				logrus.WithError(err).Fatal("Target could not be initialized,")
 			}
 		}
 
@@ -299,44 +239,42 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 	}()
 
 	go func() {
-		if !HasJobImage() {
-			logrus.Info("Wait for cache to be synced")
-			if !cache.WaitForCacheSync(stop, informer.HasSynced) {
-				logrus.Fatal("Timed out waiting for the cache to sync")
+		logrus.Info("Wait for cache to be synced")
+		if !cache.WaitForCacheSync(stop, informer.HasSynced) {
+			logrus.Fatal("Timed out waiting for the cache to sync")
+		}
+
+		logrus.Info("Finished cache sync")
+		pods := informer.GetStore().List()
+		missingPods := make([]libk8s.PodInfo, 0)
+		allImages := make([]target.ImageInNamespace, 0)
+
+		for _, t := range p.Targets {
+			targetImages, err := t.LoadImages()
+			if err != nil {
+				logrus.WithError(err).Error("Failed to load images from target")
+				continue
 			}
 
-			logrus.Info("Finished cache sync")
-			pods := informer.GetStore().List()
-			missingPods := make([]libk8s.PodInfo, 0)
-			allImages := make([]target.ImageInNamespace, 0)
-
-			for _, t := range p.Targets {
-				targetImages, err := t.LoadImages()
-				if err != nil {
-					logrus.WithError(err).Error("Failed to load images from target")
-					continue
-				}
-
-				for _, po := range pods {
-					pod := po.(*corev1.Pod)
-					info := p.K8s.Client.ExtractPodInfos(*pod)
-					for _, c := range info.Containers {
-						allImages = append(allImages, target.ImageInNamespace{Namespace: info.PodNamespace, Image: c.Image})
-						if !containsImage(targetImages, target.ImageInNamespace{
-							Image:     c.Image,
-							Namespace: info.PodNamespace,
-						}) && !p.K8s.HasAnnotation(info.Annotations, c) {
-							missingPods = append(missingPods, info)
-							logrus.Debugf("Pod %s/%s needs to be analyzed", info.PodNamespace, info.PodName)
-							break
-						}
+			for _, po := range pods {
+				pod := po.(*corev1.Pod)
+				info := p.K8s.Client.ExtractPodInfos(*pod)
+				for _, c := range info.Containers {
+					allImages = append(allImages, target.ImageInNamespace{Namespace: info.PodNamespace, Image: c.Image})
+					if !containsImage(targetImages, target.ImageInNamespace{
+						Image:     c.Image,
+						Namespace: info.PodNamespace,
+					}) && !p.K8s.HasAnnotation(info.Annotations, c) {
+						missingPods = append(missingPods, info)
+						logrus.Debugf("Pod %s/%s needs to be analyzed", info.PodNamespace, info.PodName)
+						break
 					}
 				}
 			}
+		}
 
-			if len(missingPods) > 0 {
-				p.executeSyftScans(missingPods, allImages)
-			}
+		if len(missingPods) > 0 {
+			p.executeSyftScans(missingPods, allImages)
 		}
 	}()
 }

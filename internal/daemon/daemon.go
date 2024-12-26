@@ -24,7 +24,7 @@ func Start(cronTime string, appVersion string) {
 	logrus.Debugf("Cron set to: %v", cr)
 
 	k8s := kubernetes.NewClient(internal.OperatorConfig.IgnoreAnnotations, internal.OperatorConfig.FallbackPullSecret)
-	sy := syft.New(internal.OperatorConfig.Format, libstandard.ToMap(internal.OperatorConfig.RegistryProxies), appVersion)
+	sy := syft.New(libstandard.ToMap(internal.OperatorConfig.RegistryProxies), appVersion)
 	processor := processor.New(k8s, sy)
 
 	cs := CronService{cron: cr, processor: processor}
@@ -57,15 +57,13 @@ func (c *CronService) runBackgroundService() {
 	running = true
 	logrus.Info("Execute background-service")
 
-	if !processor.HasJobImage() {
-		for _, t := range c.processor.Targets {
-			err := t.Initialize()
-			if err != nil {
-				logrus.WithError(err).Fatal("Target could not be initialized,")
-			}
-
-			t.LoadImages()
+	for _, t := range c.processor.Targets {
+		err := t.Initialize()
+		if err != nil {
+			logrus.WithError(err).Fatal("Target could not be initialized,")
 		}
+
+		t.LoadImages()
 	}
 
 	namespaceSelector := internal.OperatorConfig.NamespaceLabelSelector

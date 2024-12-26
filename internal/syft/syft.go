@@ -16,13 +16,6 @@ import (
 	"github.com/anchore/syft/syft/file"
 	"github.com/anchore/syft/syft/format"
 	"github.com/anchore/syft/syft/format/cyclonedxjson"
-	"github.com/anchore/syft/syft/format/cyclonedxxml"
-	"github.com/anchore/syft/syft/format/github"
-	"github.com/anchore/syft/syft/format/spdxjson"
-	"github.com/anchore/syft/syft/format/spdxtagvalue"
-	"github.com/anchore/syft/syft/format/syftjson"
-	"github.com/anchore/syft/syft/format/table"
-	"github.com/anchore/syft/syft/format/text"
 	"github.com/anchore/syft/syft/sbom"
 
 	"github.com/anchore/syft/syft/source"
@@ -32,15 +25,13 @@ import (
 )
 
 type Syft struct {
-	sbomFormat       string
 	resolveVersion   func() string
 	proxyRegistryMap map[string]string
 	appVersion       string
 }
 
-func New(sbomFormat string, proxyRegistryMap map[string]string, appVersion string) *Syft {
+func New(proxyRegistryMap map[string]string, appVersion string) *Syft {
 	return &Syft{
-		sbomFormat:       sbomFormat,
 		resolveVersion:   getSyftVersion,
 		proxyRegistryMap: proxyRegistryMap,
 		appVersion:       appVersion,
@@ -85,7 +76,7 @@ func (s *Syft) ExecuteSyft(img *oci.RegistryImage) (string, error) {
 
 	cfg := syft.DefaultCreateSBOMConfig().
 		WithParallelism(5).
-		WithTool("sbom-operator", s.appVersion).
+		WithTool("devguard-operator", s.appVersion).
 		WithFilesConfig(
 			filecataloging.DefaultConfig().
 				WithSelection(file.FilesOwnedByPackageSelection).
@@ -102,7 +93,7 @@ func (s *Syft) ExecuteSyft(img *oci.RegistryImage) (string, error) {
 	}
 
 	// you can use other formats such as format.CycloneDxJSONOption or format.SPDXJSONOption ...
-	encoder, err := GetEncoder(s.sbomFormat)
+	encoder, err := GetEncoder()
 	if err != nil {
 		logrus.WithError(err).Error("Could not resolve encoder")
 		return "", err
@@ -137,27 +128,8 @@ func getSource(ctx context.Context, registryOptions *image.RegistryOptions, user
 	return src, nil
 }
 
-func GetEncoder(sbomFormat string) (sbom.FormatEncoder, error) {
-	switch sbomFormat {
-	case "json", "syftjson":
-		return syftjson.NewFormatEncoder(), nil
-	case "cyclonedx", "cyclone", "cyclonedxxml":
-		return cyclonedxxml.NewFormatEncoderWithConfig(cyclonedxxml.DefaultEncoderConfig())
-	case "cyclonedxjson":
-		return cyclonedxjson.NewFormatEncoderWithConfig(cyclonedxjson.DefaultEncoderConfig())
-	case "spdx", "spdxtv", "spdxtagvalue":
-		return spdxtagvalue.NewFormatEncoderWithConfig(spdxtagvalue.DefaultEncoderConfig())
-	case "spdxjson":
-		return spdxjson.NewFormatEncoderWithConfig(spdxjson.DefaultEncoderConfig())
-	case "github", "githubjson":
-		return github.NewFormatEncoder(), nil
-	case "text":
-		return text.NewFormatEncoder(), nil
-	case "table":
-		return table.NewFormatEncoder(), nil
-	default:
-		return syftjson.NewFormatEncoder(), nil
-	}
+func GetEncoder() (sbom.FormatEncoder, error) {
+	return cyclonedxjson.NewFormatEncoderWithConfig(cyclonedxjson.DefaultEncoderConfig())
 }
 
 func GetFileName(sbomFormat string) string {
