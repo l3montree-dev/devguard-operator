@@ -3,9 +3,9 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
-	"github.com/sirupsen/logrus"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -25,7 +25,7 @@ type KubeClient struct {
 }
 
 var (
-	AnnotationTemplate = "ckotzbauer.sbom-operator.io/%s"
+	AnnotationTemplate = "devguard.org/%s"
 	/* #nosec */
 	jobSecretName       = "sbom-operator-job-config"
 	JobName             = "sbom-operator-job"
@@ -49,7 +49,6 @@ func (client *KubeClient) StartPodInformer(podLabelSelector string, handler cach
 
 	err = informer.SetTransform(func(x interface{}) (interface{}, error) {
 		pod := x.(*corev1.Pod).DeepCopy()
-		logrus.Tracef("Transform %s/%s", pod.Namespace, pod.Name)
 
 		return &corev1.Pod{
 				ObjectMeta: meta.ObjectMeta{
@@ -78,7 +77,7 @@ func loadFallbackPullSecret(client *libk8s.KubeClient, namespace, name string) [
 
 	if name != "" {
 		if namespace == "" {
-			logrus.Debugf("please specify the environment variable 'POD_NAMESPACE' in order to use the fallbackPullSecret")
+			slog.Debug("please specify the environment variable 'POD_NAMESPACE' in order to use the fallbackPullSecret")
 		} else {
 			fallbackPullSecret = client.LoadSecrets(namespace, []corev1.LocalObjectReference{{Name: name}})
 		}
@@ -117,7 +116,7 @@ func (client *KubeClient) UpdatePodAnnotation(pod libk8s.PodInfo) {
 			break
 		}
 
-		logrus.WithError(err).Warnf("Failed to update annotation for pod %s/%s!", pod.PodNamespace, pod.PodName)
+		slog.Warn("Failed to update annotation", "namespace", pod.PodNamespace, "name", pod.PodName)
 	}
 }
 
@@ -301,7 +300,7 @@ func (client *KubeClient) CreateConfigMap(namespace, name, imageId string, data 
 }
 
 func (client *KubeClient) ListConfigMaps() ([]corev1.ConfigMap, error) {
-	list, err := client.Client.Client.CoreV1().ConfigMaps("").List(context.Background(), meta.ListOptions{LabelSelector: "ckotzbauer.sbom-operator.io=true"})
+	list, err := client.Client.Client.CoreV1().ConfigMaps("").List(context.Background(), meta.ListOptions{LabelSelector: "devguard.org=true"})
 	return list.Items, err
 }
 

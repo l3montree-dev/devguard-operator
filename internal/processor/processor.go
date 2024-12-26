@@ -1,18 +1,21 @@
 package processor
 
 import (
+	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
+	"github.com/ckotzbauer/libk8soci/pkg/oci"
 	"github.com/ckotzbauer/sbom-operator/internal"
 	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
-	"github.com/ckotzbauer/sbom-operator/internal/syft"
+	"github.com/ckotzbauer/sbom-operator/internal/trivy"
+
 	"github.com/ckotzbauer/sbom-operator/internal/target"
 	"github.com/ckotzbauer/sbom-operator/internal/target/devguard"
 
-	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/tools/cache"
 
 	corev1 "k8s.io/api/core/v1"
@@ -20,15 +23,15 @@ import (
 
 type Processor struct {
 	K8s      *kubernetes.KubeClient
-	sy       *syft.Syft
+	trivy    *trivy.Trivy
 	Targets  []target.Target
 	imageMap map[string]bool
 }
 
-func New(k8s *kubernetes.KubeClient, sy *syft.Syft) *Processor {
-	targets := initTargets(k8s)
+func New(k8s *kubernetes.KubeClient, triv *trivy.Trivy) *Processor {
+	targets := initTargets()
 
-	return &Processor{K8s: k8s, sy: sy, Targets: targets, imageMap: make(map[string]bool)}
+	return &Processor{K8s: k8s, trivy: triv, Targets: targets, imageMap: make(map[string]bool)}
 }
 
 func (p *Processor) ListenForPods() {
@@ -39,7 +42,6 @@ func (p *Processor) ListenForPods() {
 			newPod := new.(*corev1.Pod)
 			oldInfo := p.K8s.Client.ExtractPodInfos(*oldPod)
 			newInfo := p.K8s.Client.ExtractPodInfos(*newPod)
-			logrus.Tracef("Pod %s/%s was updated.", newInfo.PodNamespace, newInfo.PodName)
 
 			var removedContainers []*libk8s.ContainerInfo
 			newInfo.Containers, removedContainers = getChangedContainers(oldInfo, newInfo)
@@ -50,13 +52,13 @@ func (p *Processor) ListenForPods() {
 		DeleteFunc: func(obj interface{}) {
 			pod := obj.(*corev1.Pod)
 			info := p.K8s.Client.ExtractPodInfos(*pod)
-			logrus.Tracef("Pod %s/%s was removed.", info.PodNamespace, info.PodName)
+
 			p.cleanupImagesIfNeeded(info.PodNamespace, info.Containers, informer.GetStore().List())
 		},
 	})
 
 	if err != nil {
-		logrus.WithError(err).Fatal("Can't listen for pod-changes.")
+		slog.Error("Can't listen for pod-changes.", "err", err)
 		return
 	}
 
@@ -64,7 +66,16 @@ func (p *Processor) ListenForPods() {
 }
 
 func (p *Processor) ProcessAllPods(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
-	p.executeSyftScans(pods, allImages)
+	p.executeScans(pods, allImages)
+}
+
+func getImageName(img *oci.RegistryImage) string {
+	// remove the tag if exists
+	if strings.Contains(img.Image, ":") {
+		return strings.Split(img.Image, ":")[0]
+	}
+
+	return img.Image
 }
 
 func (p *Processor) scanPod(pod libk8s.PodInfo) {
@@ -72,16 +83,16 @@ func (p *Processor) scanPod(pod libk8s.PodInfo) {
 	p.K8s.InjectPullSecrets(pod)
 
 	for _, container := range pod.Containers {
-		alreadyScanned := p.imageMap[container.Image.ImageID]
-		if p.K8s.HasAnnotation(pod.Annotations, container) || alreadyScanned {
-			logrus.Debugf("Skip image %s", container.Image.ImageID)
+		alreadyScanned := p.imageMap[pod.PodNamespace+"/"+getImageName(container.Image)]
+		if /*p.K8s.HasAnnotation(pod.Annotations, container) ||*/ alreadyScanned {
+			slog.Debug("Image already scanned", "image", container.Image.Image)
 			continue
 		}
 
-		p.imageMap[container.Image.ImageID] = true
-		sbom, err := p.sy.ExecuteSyft(container.Image)
+		p.imageMap[pod.PodNamespace+"/"+getImageName(container.Image)] = true
+		sbom, err := p.trivy.ExecuteTrivy(container.Image)
 		if err != nil {
-			// Error is already handled from syft module.
+			slog.Error("scan failed", "err", err)
 			continue
 		}
 
@@ -96,7 +107,7 @@ func (p *Processor) scanPod(pod libk8s.PodInfo) {
 	}
 }
 
-func initTargets(k8s *kubernetes.KubeClient) []target.Target {
+func initTargets() []target.Target {
 	targets := make([]target.Target, 0)
 
 	var err error
@@ -105,17 +116,13 @@ func initTargets(k8s *kubernetes.KubeClient) []target.Target {
 	targets = append(targets, t)
 
 	if err != nil {
-		logrus.WithError(err).Fatal("Config-Validation failed!")
-	}
-
-	if len(targets) == 0 {
-		logrus.Fatalf("Please specify at least one target.")
+		panic(err)
 	}
 
 	return targets
 }
 
-func (p *Processor) executeSyftScans(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
+func (p *Processor) executeScans(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
 	for _, pod := range pods {
 		p.scanPod(pod)
 	}
@@ -124,7 +131,7 @@ func (p *Processor) executeSyftScans(pods []libk8s.PodInfo, allImages []target.I
 		targetImages, err := t.LoadImages()
 
 		if err != nil {
-			logrus.WithError(err).Error("Failed to load images from target")
+			slog.Error("Failed to load images from target", "err", err)
 			continue
 		}
 
@@ -133,7 +140,8 @@ func (p *Processor) executeSyftScans(pods []libk8s.PodInfo, allImages []target.I
 			if !containsImage(allImages, t) {
 				removableImages = append(removableImages, t)
 				delete(p.imageMap, t.String())
-				logrus.Debugf("Image %s marked for removal", t.String())
+
+				slog.Debug("Image marked for removal", "image", t.String())
 			}
 		}
 
@@ -163,7 +171,7 @@ func getChangedContainers(oldPod, newPod libk8s.PodInfo) ([]*libk8s.ContainerInf
 
 func containsImage(images []target.ImageInNamespace, image target.ImageInNamespace) bool {
 	for _, i := range images {
-		if i.Image.Image == i.Image.Image && i.Namespace == image.Namespace {
+		if i.String() == image.String() {
 			return true
 		}
 	}
@@ -193,9 +201,12 @@ func (p *Processor) cleanupImagesIfNeeded(namespace string, removedContainers []
 		}
 
 		if !found {
-			images = append(images, target.ImageInNamespace{Namespace: namespace, Image: c.Image})
-			delete(p.imageMap, c.Image.ImageID)
-			logrus.Debugf("Image %s marked for removal", c.Image.ImageID)
+			imageWithNamespace := target.ImageInNamespace{Namespace: namespace, Image: c.Image}
+			images = append(images, imageWithNamespace)
+			delete(p.imageMap, imageWithNamespace.String())
+
+			slog.Debug("Image marked for removal", "image", imageWithNamespace.String())
+
 		}
 	}
 
@@ -216,7 +227,7 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 			sig := <-sigs
 			switch sig {
 			case syscall.SIGTERM, syscall.SIGINT:
-				logrus.Infof("Received signal %s", sig)
+				slog.Info("Received signal to stop", "signal", sig)
 				close(stop)
 				run = false
 			}
@@ -228,45 +239,48 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 		for _, t := range p.Targets {
 			err := t.Initialize()
 			if err != nil {
-				logrus.WithError(err).Fatal("Target could not be initialized,")
+				slog.Error("Target could not be initialized", "err", err)
 			}
 		}
 
-		logrus.Info("Start pod-informer")
+		slog.Info("Start pod-informer")
 		informer.Run(stop)
-		logrus.Info("Pod-informer has stopped")
+		slog.Info("Pod-informer has stopped")
 		os.Exit(0)
 	}()
 
 	go func() {
-		logrus.Info("Wait for cache to be synced")
+		slog.Info("Wait for cache to be synced")
 		if !cache.WaitForCacheSync(stop, informer.HasSynced) {
-			logrus.Fatal("Timed out waiting for the cache to sync")
+			slog.Error("Timed out waiting for the cache to sync")
+			panic("Timed out waiting for the cache to sync")
 		}
 
-		logrus.Info("Finished cache sync")
+		slog.Info("Finished cache sync")
 		pods := informer.GetStore().List()
 		missingPods := make([]libk8s.PodInfo, 0)
 		allImages := make([]target.ImageInNamespace, 0)
 
 		for _, t := range p.Targets {
 			targetImages, err := t.LoadImages()
+
 			if err != nil {
-				logrus.WithError(err).Error("Failed to load images from target")
+				slog.Error("Failed to load images from target", "err", err)
 				continue
 			}
 
 			for _, po := range pods {
 				pod := po.(*corev1.Pod)
+				slog.Debug("Pod found", "pod", pod.Name, "namespace", pod.Namespace)
 				info := p.K8s.Client.ExtractPodInfos(*pod)
 				for _, c := range info.Containers {
 					allImages = append(allImages, target.ImageInNamespace{Namespace: info.PodNamespace, Image: c.Image})
 					if !containsImage(targetImages, target.ImageInNamespace{
 						Image:     c.Image,
 						Namespace: info.PodNamespace,
-					}) && !p.K8s.HasAnnotation(info.Annotations, c) {
+					}) {
 						missingPods = append(missingPods, info)
-						logrus.Debugf("Pod %s/%s needs to be analyzed", info.PodNamespace, info.PodName)
+						slog.Debug("Pod needs to be analyzed", "pod", info.PodName, "namespace", info.PodNamespace)
 						break
 					}
 				}
@@ -274,7 +288,8 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 		}
 
 		if len(missingPods) > 0 {
-			p.executeSyftScans(missingPods, allImages)
+			slog.Info("Execute initial scans on missing pods", "amount", len(missingPods))
+			p.executeScans(missingPods, allImages)
 		}
 	}()
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -11,7 +12,6 @@ import (
 	"github.com/gosimple/slug"
 	"github.com/l3montree-dev/devguard/pkg/devguard"
 	parser "github.com/novln/docker-parser"
-	"github.com/sirupsen/logrus"
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/oci"
 	"github.com/ckotzbauer/sbom-operator/internal"
@@ -31,20 +31,14 @@ type DevGuardTarget struct {
 	client devguard.HTTPClient
 }
 
-const (
-	kubernetesCluster  = "kubernetes-cluster"
-	sbomOperator       = "sbom-operator"
-	rawImageId         = "raw-image-id"
-	podNamespaceTagKey = "namespace"
-)
-
 func NewDevGuardTarget(token, apiUrl, rootProjectName string, tags []string) *DevGuardTarget {
 	// fetch the root project id
 	client := devguard.NewHTTPClient(token, apiUrl)
 
 	arr := strings.Split(rootProjectName, "/")
-	if len(arr) != 2 {
-		logrus.Fatalf("Invalid root project name: %s. Needs to be <organization slug>/<project slug>", rootProjectName)
+	if len(arr) != 3 {
+		slog.Error(fmt.Sprintf("invalid root project name: %s. Needs to be <organization slug>/projects/<project slug>", rootProjectName))
+		panic(fmt.Sprintf("invalid root project name: %s. Needs to be <organization slug>/projects/<project slug>", rootProjectName))
 	}
 
 	return &DevGuardTarget{
@@ -52,7 +46,7 @@ func NewDevGuardTarget(token, apiUrl, rootProjectName string, tags []string) *De
 		token:  token,
 		tags:   tags,
 
-		rootProjectSlug:  arr[1],
+		rootProjectSlug:  arr[2],
 		organizationSlug: arr[0],
 		client:           client,
 	}
@@ -76,40 +70,40 @@ func (g *DevGuardTarget) ValidateConfig() error {
 
 func (g *DevGuardTarget) Initialize() error {
 	// set the root project id
-	rootProjectID, err := g.getProjectID(g.rootProjectSlug)
+	rootProject, err := g.getProjectBySlug(g.rootProjectSlug)
 	if err != nil {
 		return err
 	}
 
-	g.rootProjectID = rootProjectID
+	g.rootProjectID = rootProject["id"].(string)
 	return nil
 }
 
-func (g *DevGuardTarget) getProjectID(slug string) (string, error) {
+func (g *DevGuardTarget) getProjectBySlug(slug string) (map[string]interface{}, error) {
 	req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, slug), nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := g.client.Do(req)
 
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return "", nil
+		return nil, nil
 	}
 
 	var project map[string]interface{}
 	// parse the response body
 	err = json.NewDecoder(resp.Body).Decode(&project)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return project["id"].(string), nil
+	return project, nil
 }
 
 func (g *DevGuardTarget) getAssetBySlug(projectSlug, slug string) (map[string]interface{}, error) {
@@ -126,7 +120,7 @@ func (g *DevGuardTarget) getAssetBySlug(projectSlug, slug string) (map[string]in
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("Asset not found")
+		return nil, fmt.Errorf("asset not found")
 	}
 
 	var asset map[string]interface{}
@@ -144,6 +138,10 @@ func (g *DevGuardTarget) createAssetInsideProject(projectSlug string, assetName 
 	createRequestBody := map[string]interface{}{
 		"name":        assetName,
 		"description": fmt.Sprintf("Controlled by an Kubernetes Operator. Asset %s", assetName),
+
+		"confidentialityRequirement": "medium",
+		"integrityRequirement":       "medium",
+		"availabilityRequirement":    "medium",
 	}
 
 	// to json
@@ -189,7 +187,7 @@ func (g *DevGuardTarget) createChildNamespaceProject(namespace string) (map[stri
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("/api/v1/organizations/%s/projects/"), bytes.NewReader(jsonBody))
+	req, err := http.NewRequest("POST", fmt.Sprintf("/api/v1/organizations/%s/projects/", g.organizationSlug), bytes.NewReader(jsonBody))
 
 	if err != nil {
 		return nil, err
@@ -215,7 +213,7 @@ func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
 	// fetch all projects inside the root project
 	req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects?parentId=%s", g.organizationSlug, g.rootProjectID), nil)
 	if err != nil {
-		logrus.Errorf("Could not fetch projects: %v", err)
+		slog.Error("Could not fetch projects", "err", err)
 		return nil, err
 	}
 
@@ -224,14 +222,18 @@ func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
 	var res []map[string]interface{}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		logrus.Errorf("Could not fetch projects: %v", err)
+		slog.Error("Could not fetch projects", "err", err)
 		return nil, err
 	}
 
 	err = json.NewDecoder(resp.Body).Decode(&res)
 	if err != nil {
-		logrus.Errorf("Could not fetch projects: %v", err)
+		slog.Error("Could not fetch projects", "err", err)
 		return nil, err
+	}
+
+	for el := range res {
+		slog.Info("Project", "name", res[el]["name"])
 	}
 
 	// fetch all assets for each project.
@@ -248,20 +250,20 @@ func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
 			// fetch all assets
 			req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/", g.organizationSlug, project["slug"].(string)), nil)
 			if err != nil {
-				logrus.Errorf("Could not fetch assets: %v", err)
+				slog.Error("Could not fetch assets", "err", err)
 				return
 			}
 
 			resp, err := g.client.Do(req)
 			if err != nil {
-				logrus.Errorf("Could not fetch assets: %v", err)
+				slog.Error("Could not fetch assets", "err", err)
 				return
 			}
 
 			var assets []map[string]interface{}
 			err = json.NewDecoder(resp.Body).Decode(&assets)
 			if err != nil {
-				logrus.Errorf("Could not fetch assets: %v", err)
+				slog.Error("Could not fetch assets", "err", err)
 				return
 			}
 
@@ -295,29 +297,28 @@ func (g *DevGuardTarget) ProcessSbom(ctx *target.TargetContext) error {
 	assetName := ""
 	version := ""
 
-	logrus.Debugf("%v", g)
-
 	// Set custom project name by kubernetes annotation?
 	if g.assetNameAnnotationKey != "" {
-		logrus.Debugf(`Try to set project name by configured annotationkey "%s"`, g.assetNameAnnotationKey)
+		slog.Debug(`Try to set project name by configured annotationkey`, "assetNameAnnotationKey", g.assetNameAnnotationKey)
 		for podAnnotationKey, podAnnotationValue := range ctx.Pod.Annotations {
 			if strings.HasPrefix(podAnnotationKey, g.assetNameAnnotationKey) {
 				if podAnnotationValue != "" {
 					// determine container name from annotation key
 					containerName := getContainerNameFromAnnotationKey(podAnnotationKey, "/")
 					if containerName != "" {
-						logrus.Debugf(`ContainerName found: "%s"`, containerName)
+						slog.Debug(`ContainerName found"`, "name", containerName)
 						// correct container?
 						if containerName == ctx.Container.Name {
 							assetName, version = getNameAndVersionFromString(podAnnotationValue, ":")
-							logrus.Infof(`Custom project name found at annotation "%s" for container "%s": "%s:%s"`, podAnnotationKey, containerName, assetName, version)
+							slog.Info(`Custom project name found`, "podAnnotationKey", podAnnotationKey, "containerName", containerName, "assetName", assetName, "version", version)
 							break
 						}
 					} else {
-						logrus.Errorf(`Containername could not be determined from annotation "%s". Skip setting project name.`, podAnnotationKey)
+						slog.Error(`Containername could not be determined from annotation. Skip setting project name.`, "podAnnotationKey", podAnnotationKey)
+
 					}
 				} else {
-					logrus.Errorf(`Empty value for custom project name annotation "%s". Skip setting custom project name.`, podAnnotationKey)
+					slog.Error(`Empty value for custom project name annotation. Skip setting custom project name.`, "podAnnotationKey", podAnnotationKey)
 				}
 			}
 		}
@@ -329,61 +330,61 @@ func (g *DevGuardTarget) ProcessSbom(ctx *target.TargetContext) error {
 	}
 
 	if ctx.Sbom == "" {
-		logrus.Infof("Empty SBOM - skip image (image=%s)", ctx.Image.ImageID)
+		slog.Info("Empty SBOM - skip image", "image", ctx.Image.ImageID)
 		return nil
 	}
 
 	client := devguard.NewHTTPClient(g.token, g.apiUrl)
 	// make sure the namespace project exists inside the root project
-	slug := slug.Make(ctx.Pod.PodNamespace)
-	_, err := g.getProjectID(slug)
-	var project map[string]interface{}
+	s := slug.Make(ctx.Pod.PodNamespace)
+	project, err := g.getProjectBySlug(s)
+
 	if err != nil {
 		// the project does not exist yet
 		// create it
 		project, err = g.createChildNamespaceProject(ctx.Pod.PodNamespace)
 		if err != nil {
-			logrus.Errorf("Could not create project: %v", err)
+			slog.Error("Could not create project", "err", err)
 			return err
 		}
 	}
 
 	// check if the asset does already exist inside the project
-	asset, err := g.getAssetBySlug(slug, assetName)
+	asset, err := g.getAssetBySlug(s, slug.Make(assetName))
 	if err != nil {
 		// the asset does not exist yet
 		// create it now
 		asset, err = g.createAssetInsideProject(project["slug"].(string), assetName)
 		if err != nil {
-			logrus.Errorf("Could not create asset: %v", err)
+			slog.Error("Could not create asset", "err", err)
 			return err
 		}
 	}
 
 	// asset exists now.
 	// upload the SBOM to the asset
-	req, err := http.NewRequest("POST", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/%s/scan/", g.organizationSlug, project["slug"].(string), asset["slug"].(string)), strings.NewReader(ctx.Sbom))
+	req, err := http.NewRequest("POST", "/api/v1/scan/", strings.NewReader(ctx.Sbom))
 	if err != nil {
-		logrus.Errorf("Could not upload BOM: %v", err)
+		slog.Error("Could not upload BOM", "err", err)
 		return err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Risk-Management", "true")
-	req.Header.Set("X-Asset-Name", assetName)
+	req.Header.Set("X-Asset-Name", fmt.Sprintf("%s/projects/%s/assets/%s", g.organizationSlug, s, asset["slug"].(string)))
 	req.Header.Set("X-Asset-Version", version)
 	req.Header.Set("X-Scan-Type", "container-scanning")
 	req.Header.Set("X-Scanner", "github.com/l3montree-dev/devguard-operator")
 
-	logrus.Infof("Sending SBOM to DevGuard (assetName=%s, version=%s)", assetName, version)
+	slog.Info("Sending SBOM to DevGuard", "assetName", assetName, "version", version)
 
 	_, err = client.Do(req)
 	if err != nil {
-		logrus.Errorf("Could not upload BOM: %v", err)
+		slog.Error("Could not upload BOM", "err", err)
 		return err
 	}
 
-	logrus.Infof("Uploaded SBOM")
+	slog.Info("Uploaded SBOM to DevGuard", "assetName", assetName, "version", version)
 	return nil
 }
 
@@ -394,29 +395,17 @@ func (g *DevGuardTarget) Remove(images []target.ImageInNamespace) error {
 		wg.Add(1)
 		go func(img target.ImageInNamespace) {
 			defer wg.Done()
-			// archive the asset
-			reqBody := map[string]interface{}{
-				"archived": true,
-			}
 
-			jsonBytes := new(bytes.Buffer)
-			err := json.NewEncoder(jsonBytes).Encode(reqBody)
-
+			req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/%s/", g.organizationSlug, img.Namespace, img.Image.ImageID), nil)
 			if err != nil {
-				logrus.Errorf("Could not archive asset: %v", err)
-				return
-			}
-
-			req, err := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/%s/", g.organizationSlug, img.Namespace, img.Image.ImageID), jsonBytes)
-			if err != nil {
-				logrus.Errorf("Could not archive asset: %v", err)
+				slog.Error("could not delete asset", "err", err)
 				return
 			}
 
 			req.Header.Set("Content-Type", "application/json")
 			_, err = g.client.Do(req)
 			if err != nil {
-				logrus.Errorf("Could not archive asset: %v", err)
+				slog.Error("could not delete asset", "err", err)
 				return
 			}
 		}(img)
@@ -439,51 +428,38 @@ func (g *DevGuardTarget) Remove(images []target.ImageInNamespace) error {
 			defer wg.Done()
 			req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/", g.organizationSlug, namespace), nil)
 			if err != nil {
-				logrus.Errorf("Could not fetch assets: %v", err)
+				slog.Error("Could not fetch assets", "err", err)
 				return
 			}
 
 			resp, err := g.client.Do(req)
 			if err != nil {
-				logrus.Errorf("Could not fetch assets: %v", err)
+				slog.Error("Could not fetch assets", "err", err)
 				return
 			}
 
 			var assets []map[string]interface{}
 			err = json.NewDecoder(resp.Body).Decode(&assets)
 			if err != nil {
-				logrus.Errorf("Could not fetch assets: %v", err)
+				slog.Error("Could not fetch assets", "err", err)
 				return
 			}
 
 			if len(assets) == 0 {
-				// archive this project
-				reqBody := map[string]interface{}{
-					"archived": true,
-				}
-
-				jsonBytes := new(bytes.Buffer)
-				err := json.NewEncoder(jsonBytes).Encode(reqBody)
-
+				req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, namespace), nil)
 				if err != nil {
-					logrus.Errorf("Could not archive project: %v", err)
-					return
-				}
-
-				req, err := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, namespace), jsonBytes)
-				if err != nil {
-					logrus.Errorf("Could not archive project: %v", err)
+					slog.Error("Could not delete project", "err", err)
 					return
 				}
 
 				req.Header.Set("Content-Type", "application/json")
 				_, err = g.client.Do(req)
 				if err != nil {
-					logrus.Errorf("Could not archive project: %v", err)
+					slog.Error("Could not delete project", "err", err)
 					return
 				}
 
-				logrus.Infof("Archived project %s", namespace)
+				slog.Info("Deleted project", "namespace", namespace)
 			}
 		}(namespace)
 	}
@@ -512,9 +488,9 @@ func getContainerNameFromAnnotationKey(annotationKey string, delimiter string) s
 }
 
 func getRepoWithVersion(image *libk8s.RegistryImage) (string, string) {
-	imageRef, err := parser.Parse(image.ImageID)
+	imageRef, err := parser.Parse(image.Image)
 	if err != nil {
-		logrus.WithError(err).Errorf("Could not parse image %s", image.ImageID)
+		slog.Error("Could not parse image", "image", image.Image)
 		return "", ""
 	}
 
@@ -523,7 +499,7 @@ func getRepoWithVersion(image *libk8s.RegistryImage) (string, string) {
 	if strings.Index(image.Image, "sha256") != 0 {
 		imageRef, err = parser.Parse(image.Image)
 		if err != nil {
-			logrus.WithError(err).Errorf("Could not parse image %s", image.Image)
+			slog.Error("Could not parse image", "image", image.Image)
 			return "", ""
 		}
 	}

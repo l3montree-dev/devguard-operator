@@ -2,18 +2,18 @@ package kubernetes
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
 	parser "github.com/novln/docker-parser"
 	"github.com/novln/docker-parser/docker"
-	"github.com/sirupsen/logrus"
 )
 
 func ApplyProxyRegistry(img *oci.RegistryImage, log bool, registryProxyMap map[string]string) error {
 	imageRef, err := parser.Parse(img.ImageID)
 	if err != nil {
-		logrus.WithError(err).Errorf("Could not parse image %s", img.ImageID)
+		slog.Error("Could not parse image", "err", err, "img", img.ImageID)
 		return err
 	}
 
@@ -31,7 +31,7 @@ func ApplyProxyRegistry(img *oci.RegistryImage, log bool, registryProxyMap map[s
 			img.Image = strings.ReplaceAll(img.Image, registryToReplace, proxyRegistry)
 
 			if log {
-				logrus.Debugf("Applied Registry-Proxy %s", img.ImageID)
+				slog.Debug("Applied Registry-Proxy %s", img.ImageID)
 			}
 
 			break

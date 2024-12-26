@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"runtime"
 	"time"
 
@@ -11,10 +13,28 @@ import (
 	"github.com/ckotzbauer/sbom-operator/internal/daemon"
 	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
 	"github.com/ckotzbauer/sbom-operator/internal/processor"
-	"github.com/ckotzbauer/sbom-operator/internal/syft"
-	"github.com/sirupsen/logrus"
+	"github.com/ckotzbauer/sbom-operator/internal/trivy"
+
+	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 )
+
+// InitLogger initializes the logger with a tint handler.
+// tint is a simple logging library that allows to add colors to the log output.
+// this is obviously not required, but it makes the logs easier to read.
+func initLogger() {
+	// slog.HandlerOptions
+	w := os.Stderr
+
+	// set global logger with custom options
+	slog.SetDefault(slog.New(
+		tint.NewHandler(w, &tint.Options{
+			Level:      slog.LevelDebug,
+			TimeFormat: time.Kitchen,
+			AddSource:  true,
+		}),
+	))
+}
 
 var (
 	// Version sets the current Operator version
@@ -39,20 +59,20 @@ func newRootCmd() *cobra.Command {
 				daemon.Start(internal.OperatorConfig.Cron, Version)
 			} else {
 				k8s := kubernetes.NewClient(internal.OperatorConfig.IgnoreAnnotations, internal.OperatorConfig.FallbackPullSecret)
-				sy := syft.New(libstandard.ToMap(internal.OperatorConfig.RegistryProxies), Version)
-				p := processor.New(k8s, sy)
+				triv := trivy.New(libstandard.ToMap(internal.OperatorConfig.RegistryProxies), Version)
+				p := processor.New(k8s, triv)
 				p.ListenForPods()
 			}
 
-			logrus.Info("Webserver is running at port 8080")
+			slog.Info("webserver is running at port 8081")
 			http.HandleFunc("/health", health)
 
 			server := &http.Server{
-				Addr:              ":8080",
+				Addr:              ":8081",
 				ReadHeaderTimeout: 3 * time.Second,
 			}
 
-			logrus.WithError(server.ListenAndServe()).Fatal("Starting webserver failed!")
+			slog.Error("starting webserver failed", "err", server.ListenAndServe())
 		},
 	}
 
@@ -79,11 +99,7 @@ func newRootCmd() *cobra.Command {
 }
 
 func printVersion() {
-	logrus.Info(fmt.Sprintf("Version: %s", Version))
-	logrus.Info(fmt.Sprintf("Commit: %s", Commit))
-	logrus.Info(fmt.Sprintf("Built at: %s", Date))
-	logrus.Info(fmt.Sprintf("Built by: %s", BuiltBy))
-	logrus.Info(fmt.Sprintf("Go Version: %s", runtime.Version()))
+	slog.Info("starting devguard-operator", "version", Version, "commit", Commit, "date", Date, "builtBy", BuiltBy, "goVersion", runtime.Version())
 }
 
 func health(w http.ResponseWriter, req *http.Request) {
@@ -92,6 +108,8 @@ func health(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
+	initLogger()
+
 	rootCmd := newRootCmd()
 	err := rootCmd.Execute()
 	if err != nil {

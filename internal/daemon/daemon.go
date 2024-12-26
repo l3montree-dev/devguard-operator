@@ -1,15 +1,16 @@
 package daemon
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/ckotzbauer/libstandard"
 	"github.com/ckotzbauer/sbom-operator/internal"
 	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
 	"github.com/ckotzbauer/sbom-operator/internal/processor"
-	"github.com/ckotzbauer/sbom-operator/internal/syft"
+	"github.com/ckotzbauer/sbom-operator/internal/trivy"
+
 	"github.com/robfig/cron"
-	"github.com/sirupsen/logrus"
 )
 
 type CronService struct {
@@ -21,11 +22,11 @@ var running = false
 
 func Start(cronTime string, appVersion string) {
 	cr := libstandard.Unescape(cronTime)
-	logrus.Debugf("Cron set to: %v", cr)
+	slog.Debug("settings cron", "cronTime", cronTime)
 
 	k8s := kubernetes.NewClient(internal.OperatorConfig.IgnoreAnnotations, internal.OperatorConfig.FallbackPullSecret)
-	sy := syft.New(libstandard.ToMap(internal.OperatorConfig.RegistryProxies), appVersion)
-	processor := processor.New(k8s, sy)
+	triv := trivy.New(libstandard.ToMap(internal.OperatorConfig.RegistryProxies), appVersion)
+	processor := processor.New(k8s, triv)
 
 	cs := CronService{cron: cr, processor: processor}
 	cs.printNextExecution()
@@ -33,7 +34,8 @@ func Start(cronTime string, appVersion string) {
 	c := cron.New()
 	err := c.AddFunc(cr, func() { cs.runBackgroundService() })
 	if err != nil {
-		logrus.WithError(err).Fatal("Could not configure cron")
+		slog.Error("could not configure cron", "err", err)
+		return
 	}
 
 	c.Start()
@@ -42,11 +44,13 @@ func Start(cronTime string, appVersion string) {
 func (c *CronService) printNextExecution() {
 	s, err := cron.Parse(c.cron)
 	if err != nil {
-		logrus.WithError(err).Fatal("Cron cannot be parsed")
+		slog.Error("could not parse cron", "err", err)
+		return
 	}
 
 	nextRun := s.Next(time.Now())
-	logrus.Debugf("Next background-service run at: %v", nextRun)
+
+	slog.Info("Next execution", "time", nextRun.Format(time.RFC3339))
 }
 
 func (c *CronService) runBackgroundService() {
@@ -55,12 +59,13 @@ func (c *CronService) runBackgroundService() {
 	}
 
 	running = true
-	logrus.Info("Execute background-service")
+	slog.Info("Execute background-service")
 
 	for _, t := range c.processor.Targets {
 		err := t.Initialize()
 		if err != nil {
-			logrus.WithError(err).Fatal("Target could not be initialized,")
+			slog.Error("Target could not be initialized", "err", err)
+			continue
 		}
 
 		t.LoadImages()
@@ -69,12 +74,13 @@ func (c *CronService) runBackgroundService() {
 	namespaceSelector := internal.OperatorConfig.NamespaceLabelSelector
 	namespaces, err := c.processor.K8s.Client.ListNamespaces(namespaceSelector)
 	if err != nil {
-		logrus.WithError(err).Errorf("failed to list namespaces with selector: %s, abort background-service", namespaceSelector)
+		slog.Error("failed to list namespaces", "err", err)
 		running = false
 		return
 	}
 
-	logrus.Debugf("Discovered %v namespaces", len(namespaces))
+	slog.Debug("Discovered namespaces", "namespaces", namespaces)
+
 	pods, allImages := c.processor.K8s.LoadImageInfos(namespaces, internal.OperatorConfig.PodLabelSelector)
 	c.processor.ProcessAllPods(pods, allImages)
 

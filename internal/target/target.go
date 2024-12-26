@@ -1,6 +1,8 @@
 package target
 
 import (
+	"strings"
+
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
 )
@@ -18,7 +20,11 @@ type ImageInNamespace struct {
 }
 
 func (i ImageInNamespace) String() string {
-	return i.Namespace + "/" + i.Image.ImageID
+	// remove the tag from the image name
+	if strings.Contains(i.Image.Image, ":") {
+		return i.Namespace + "/" + strings.Split(i.Image.Image, ":")[0]
+	}
+	return i.Namespace + "/" + i.Image.Image
 }
 
 type Target interface {
