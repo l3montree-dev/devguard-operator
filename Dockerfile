@@ -1,17 +1,15 @@
-FROM alpine:3.20@sha256:beefdbd8a1da6d2915566fde36db9db0b524eb737fc57cd1367effd16dc0d06d as alpine
+FROM golang:1.23.1-alpine AS golang-builder
 
-ARG TARGETARCH
+# set the working directory
+WORKDIR /app
 
-RUN set -eux; \
-    apk add -U --no-cache ca-certificates
+COPY . .
 
+# build the scanner
+RUN CGO_ENABLED=0 go build -o devguard-operator main.go
 
 FROM scratch
 
-ARG TARGETOS
-ARG TARGETARCH
+COPY --from=golang-builder /app/devguard-operator /usr/local/bin/devguard-operator
 
-COPY --from=alpine /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY dist/sbom-operator_${TARGETOS}_${TARGETARCH}*/sbom-operator /usr/local/bin/sbom-operator
-
-ENTRYPOINT ["/usr/local/bin/sbom-operator"]
+CMD ["/usr/local/bin/devguard-operator"]
