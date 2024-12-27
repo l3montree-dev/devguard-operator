@@ -1,4 +1,4 @@
-package devguard
+package main
 
 import (
 	"bytes"
@@ -14,8 +14,7 @@ import (
 	parser "github.com/novln/docker-parser"
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/l3montree-dev/devguard-operator/internal"
-	"github.com/l3montree-dev/devguard-operator/internal/target"
+	"github.com/l3montree-dev/devguard-operator/kubernetes"
 )
 
 type DevGuardTarget struct {
@@ -54,11 +53,11 @@ func NewDevGuardTarget(token, apiUrl, rootProjectName string, tags []string) *De
 
 func (g *DevGuardTarget) ValidateConfig() error {
 	if g.token == "" {
-		return fmt.Errorf("%s is empty", internal.ConfigDevGuardToken)
+		return fmt.Errorf("%s is empty", ConfigDevGuardToken)
 	}
 
 	if g.apiUrl == "" {
-		return fmt.Errorf("%s is empty", internal.ConfigDevGuardApiURL)
+		return fmt.Errorf("%s is empty", ConfigDevGuardApiURL)
 	}
 
 	if len(g.tags) == 0 {
@@ -122,7 +121,7 @@ func (g *DevGuardTarget) getProjectBySlug(slug string) (map[string]interface{}, 
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
+		return nil, fmt.Errorf("project not found")
 	}
 
 	var project map[string]interface{}
@@ -238,7 +237,7 @@ func (g *DevGuardTarget) createChildNamespaceProject(namespace string) (map[stri
 	return project, nil
 }
 
-func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
+func (g *DevGuardTarget) LoadImages() ([]kubernetes.ImageInNamespace, error) {
 	// fetch all projects inside the root project
 	req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects?parentId=%s", g.organizationSlug, g.rootProjectID), nil)
 	if err != nil {
@@ -270,7 +269,7 @@ func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
 	wg := sync.WaitGroup{}
 
 	// channel to collect all images
-	images := make(chan target.ImageInNamespace)
+	images := make(chan kubernetes.ImageInNamespace)
 
 	for _, project := range res {
 		wg.Add(1)
@@ -297,7 +296,7 @@ func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
 			}
 
 			for _, asset := range assets {
-				images <- target.ImageInNamespace{
+				images <- kubernetes.ImageInNamespace{
 					Namespace: project["name"].(string),
 					Image: &libk8s.RegistryImage{
 						ImageID: asset["name"].(string),
@@ -313,7 +312,7 @@ func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
 		close(images)
 	}()
 
-	var imagesInNamespace []target.ImageInNamespace = []target.ImageInNamespace{}
+	var imagesInNamespace []kubernetes.ImageInNamespace = []kubernetes.ImageInNamespace{}
 
 	for img := range images {
 		imagesInNamespace = append(imagesInNamespace, img)
@@ -322,7 +321,7 @@ func (g *DevGuardTarget) LoadImages() ([]target.ImageInNamespace, error) {
 	return imagesInNamespace, nil
 }
 
-func (g *DevGuardTarget) ProcessSbom(ctx *target.TargetContext) error {
+func (g *DevGuardTarget) ProcessSbom(ctx *TargetContext) error {
 	assetName := ""
 	version := ""
 
@@ -368,10 +367,12 @@ func (g *DevGuardTarget) ProcessSbom(ctx *target.TargetContext) error {
 	s := slug.Make(ctx.Pod.PodNamespace)
 	project, err := g.getProjectBySlug(s)
 
+	slog.Debug("checking project existence", "projectSlug", s, "err", err, "project", project)
 	if err != nil {
 		// the project does not exist yet
 		// create it
-		project, err = g.createChildNamespaceProject(ctx.Pod.PodNamespace)
+		slog.Debug("Creating project", "projectSlug", s)
+		project, err = g.createChildNamespaceProject(s)
 		if err != nil {
 			slog.Error("Could not create project", "err", err)
 			return err
@@ -417,19 +418,27 @@ func (g *DevGuardTarget) ProcessSbom(ctx *target.TargetContext) error {
 	return nil
 }
 
-func (g *DevGuardTarget) Remove(images []target.ImageInNamespace) error {
+func (g *DevGuardTarget) Remove(images []kubernetes.ImageInNamespace) error {
 
 	wg := sync.WaitGroup{}
+
 	for _, img := range images {
 		wg.Add(1)
-		go func(img target.ImageInNamespace) {
+		go func(img kubernetes.ImageInNamespace) {
 			defer wg.Done()
 
-			req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/%s/", g.organizationSlug, img.Namespace, img.Image.ImageID), nil)
+			name, _ := getRepoWithVersion(img.Image)
+
+			projectSlug := slug.Make(img.Namespace)
+			assetSlug := slug.Make(name)
+
+			req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/%s/", g.organizationSlug, projectSlug, assetSlug), nil)
 			if err != nil {
 				slog.Error("could not delete asset", "err", err)
 				return
 			}
+
+			slog.Info("Deleting asset", "projectSlug", projectSlug, "assetSlug", assetSlug)
 
 			req.Header.Set("Content-Type", "application/json")
 			_, err = g.client.Do(req)
@@ -455,7 +464,9 @@ func (g *DevGuardTarget) Remove(images []target.ImageInNamespace) error {
 		wg.Add(1)
 		go func(namespace string) {
 			defer wg.Done()
-			req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/", g.organizationSlug, namespace), nil)
+			projectSlug := slug.Make(namespace)
+
+			req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/", g.organizationSlug, projectSlug), nil)
 			if err != nil {
 				slog.Error("Could not fetch assets", "err", err)
 				return
@@ -475,7 +486,7 @@ func (g *DevGuardTarget) Remove(images []target.ImageInNamespace) error {
 			}
 
 			if len(assets) == 0 {
-				req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, namespace), nil)
+				req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, projectSlug), nil)
 				if err != nil {
 					slog.Error("Could not delete project", "err", err)
 					return
@@ -488,7 +499,7 @@ func (g *DevGuardTarget) Remove(images []target.ImageInNamespace) error {
 					return
 				}
 
-				slog.Info("Deleted project", "namespace", namespace)
+				slog.Info("Deleted project", "projectSlug", projectSlug)
 			}
 		}(namespace)
 	}

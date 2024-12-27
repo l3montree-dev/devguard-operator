@@ -1,21 +1,19 @@
-package trivy
+package main
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
 	"github.com/gosimple/slug"
-	"github.com/l3montree-dev/devguard-operator/internal/kubernetes"
+	"github.com/l3montree-dev/devguard-operator/kubernetes"
 )
 
 type Trivy struct {
@@ -24,7 +22,7 @@ type Trivy struct {
 	appVersion       string
 }
 
-func New(proxyRegistryMap map[string]string, appVersion string) *Trivy {
+func NewTrivyScanner(proxyRegistryMap map[string]string, appVersion string) *Trivy {
 	return &Trivy{
 		resolveVersion:   getTrivyVersion,
 		proxyRegistryMap: proxyRegistryMap,
@@ -110,30 +108,4 @@ func getTrivyVersion() string {
 		}
 	}
 	return ""
-}
-
-// removeTempContents clears files from /tmp (if needed, e.g. leftover scan data).
-func removeTempContents() error {
-	dir := "/tmp"
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer closeOrLog(d)
-	names, err := d.Readdirnames(-1)
-	if err != nil {
-		return err
-	}
-	for _, name := range names {
-		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func closeOrLog(c io.Closer) {
-	if err := c.Close(); err != nil {
-		slog.Error("Could not close file", "err", err)
-	}
 }

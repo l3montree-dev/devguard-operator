@@ -10,6 +10,19 @@ import (
 	"github.com/novln/docker-parser/docker"
 )
 
+type ImageInNamespace struct {
+	Namespace string
+	Image     *oci.RegistryImage
+}
+
+func (i ImageInNamespace) String() string {
+	// remove the tag from the image name
+	if strings.Contains(i.Image.Image, ":") {
+		return i.Namespace + "/" + strings.Split(i.Image.Image, ":")[0]
+	}
+	return i.Namespace + "/" + i.Image.Image
+}
+
 func ApplyProxyRegistry(img *oci.RegistryImage, log bool, registryProxyMap map[string]string) error {
 	imageRef, err := parser.Parse(img.ImageID)
 	if err != nil {

@@ -9,11 +9,7 @@ import (
 	"time"
 
 	"github.com/ckotzbauer/libstandard"
-	"github.com/l3montree-dev/devguard-operator/internal"
-	"github.com/l3montree-dev/devguard-operator/internal/daemon"
-	"github.com/l3montree-dev/devguard-operator/internal/kubernetes"
-	"github.com/l3montree-dev/devguard-operator/internal/processor"
-	"github.com/l3montree-dev/devguard-operator/internal/trivy"
+	"github.com/l3montree-dev/devguard-operator/kubernetes"
 
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
@@ -49,18 +45,18 @@ func newRootCmd() *cobra.Command {
 		Use:   "devguard-operator",
 		Short: "An operator for cataloguing all k8s-cluster-images to devguard.",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			internal.OperatorConfig = &internal.Config{}
-			return libstandard.DefaultInitializer(internal.OperatorConfig, cmd, "devguard-operator")
+			OperatorConfig = &Config{}
+			return libstandard.DefaultInitializer(OperatorConfig, cmd, "devguard-operator")
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			printVersion()
 
-			if internal.OperatorConfig.Cron != "" {
-				daemon.Start(internal.OperatorConfig.Cron, Version)
+			if OperatorConfig.Cron != "" {
+				StartDaemon(OperatorConfig.Cron, Version)
 			} else {
-				k8s := kubernetes.NewClient(internal.OperatorConfig.IgnoreAnnotations, internal.OperatorConfig.FallbackPullSecret)
-				triv := trivy.New(libstandard.ToMap(internal.OperatorConfig.RegistryProxies), Version)
-				p := processor.New(k8s, triv)
+				k8s := kubernetes.NewClient(OperatorConfig.IgnoreAnnotations, OperatorConfig.FallbackPullSecret)
+				triv := NewTrivyScanner(libstandard.ToMap(OperatorConfig.RegistryProxies), Version)
+				p := NewProcessor(k8s, triv)
 				p.ListenForPods()
 			}
 
@@ -78,22 +74,22 @@ func newRootCmd() *cobra.Command {
 
 	libstandard.AddConfigFlag(rootCmd)
 	libstandard.AddVerbosityFlag(rootCmd)
-	rootCmd.PersistentFlags().String(internal.ConfigKeyCron, "", "Backround-Service interval (CRON)")
+	rootCmd.PersistentFlags().String(ConfigKeyCron, "", "Backround-Service interval (CRON)")
 
-	rootCmd.PersistentFlags().Bool(internal.ConfigKeyIgnoreAnnotations, false, "Force analyzing of all images, including those from annotated pods.")
+	rootCmd.PersistentFlags().Bool(ConfigKeyIgnoreAnnotations, false, "Force analyzing of all images, including those from annotated pods.")
 
-	rootCmd.PersistentFlags().String(internal.ConfigKeyPodLabelSelector, "", "Kubernetes Label-Selector for pods.")
-	rootCmd.PersistentFlags().String(internal.ConfigKeyNamespaceLabelSelector, "", "Kubernetes Label-Selector for namespaces.")
+	rootCmd.PersistentFlags().String(ConfigKeyPodLabelSelector, "", "Kubernetes Label-Selector for pods.")
+	rootCmd.PersistentFlags().String(ConfigKeyNamespaceLabelSelector, "", "Kubernetes Label-Selector for namespaces.")
 
-	rootCmd.PersistentFlags().StringSlice(internal.ConfigKeyRegistryProxy, []string{}, "Registry-Proxy")
-	rootCmd.PersistentFlags().Int64(internal.ConfigKeyJobTimeout, 60*60, "Job-Timeout")
+	rootCmd.PersistentFlags().StringSlice(ConfigKeyRegistryProxy, []string{}, "Registry-Proxy")
+	rootCmd.PersistentFlags().Int64(ConfigKeyJobTimeout, 60*60, "Job-Timeout")
 
-	rootCmd.PersistentFlags().String(internal.ConfigDevGuardToken, "", "DevGuard-Token")
-	rootCmd.PersistentFlags().String(internal.ConfigDevGuardApiURL, "", "DevGuard Api URL")
-	rootCmd.PersistentFlags().String(internal.ConfigDevGuardProjectName, "", "DevGuard Project Name (eg. l3montree-cybersecurity/projects/devguard)")
+	rootCmd.PersistentFlags().String(ConfigDevGuardToken, "", "DevGuard-Token")
+	rootCmd.PersistentFlags().String(ConfigDevGuardApiURL, "", "DevGuard Api URL")
+	rootCmd.PersistentFlags().String(ConfigDevGuardProjectName, "", "DevGuard Project Name (eg. l3montree-cybersecurity/projects/devguard)")
 
-	rootCmd.MarkPersistentFlagRequired(internal.ConfigDevGuardToken)
-	rootCmd.MarkPersistentFlagRequired(internal.ConfigDevGuardProjectName)
+	rootCmd.MarkPersistentFlagRequired(ConfigDevGuardToken)
+	rootCmd.MarkPersistentFlagRequired(ConfigDevGuardProjectName)
 
 	return rootCmd
 }

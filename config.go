@@ -1,4 +1,4 @@
-package internal
+package main
 
 type Config struct {
 	Cron string `yaml:"cron" env:"SBOM_CRON" flag:"cron"`

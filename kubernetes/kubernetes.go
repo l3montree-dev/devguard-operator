@@ -15,7 +15,6 @@ import (
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/l3montree-dev/devguard-operator/internal/target"
 )
 
 type KubeClient struct {
@@ -96,13 +95,13 @@ func (client *KubeClient) InjectPullSecrets(pod libk8s.PodInfo) {
 	}
 }
 
-func (client *KubeClient) LoadImageInfos(namespaces []corev1.Namespace, podLabelSelector string) ([]libk8s.PodInfo, []target.ImageInNamespace) {
+func (client *KubeClient) LoadImageInfos(namespaces []corev1.Namespace, podLabelSelector string) ([]libk8s.PodInfo, []ImageInNamespace) {
 	podInfos := client.Client.LoadPodInfos(namespaces, podLabelSelector)
-	allImages := make([]target.ImageInNamespace, 0)
+	allImages := make([]ImageInNamespace, 0)
 
 	for _, pod := range podInfos {
 		for _, container := range pod.Containers {
-			allImages = append(allImages, target.ImageInNamespace{Namespace: pod.PodNamespace, Image: container.Image})
+			allImages = append(allImages, ImageInNamespace{Namespace: pod.PodNamespace, Image: container.Image})
 		}
 	}
 

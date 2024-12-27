@@ -1,4 +1,4 @@
-package processor
+package main
 
 import (
 	"log/slog"
@@ -9,12 +9,7 @@ import (
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/l3montree-dev/devguard-operator/internal"
-	"github.com/l3montree-dev/devguard-operator/internal/kubernetes"
-	"github.com/l3montree-dev/devguard-operator/internal/trivy"
-
-	"github.com/l3montree-dev/devguard-operator/internal/target"
-	"github.com/l3montree-dev/devguard-operator/internal/target/devguard"
+	"github.com/l3montree-dev/devguard-operator/kubernetes"
 
 	"k8s.io/client-go/tools/cache"
 
@@ -23,12 +18,12 @@ import (
 
 type Processor struct {
 	K8s      *kubernetes.KubeClient
-	trivy    *trivy.Trivy
-	Targets  []target.Target
+	trivy    *Trivy
+	Targets  []Target
 	imageMap map[string]bool
 }
 
-func New(k8s *kubernetes.KubeClient, triv *trivy.Trivy) *Processor {
+func NewProcessor(k8s *kubernetes.KubeClient, triv *Trivy) *Processor {
 	targets := initTargets()
 
 	return &Processor{K8s: k8s, trivy: triv, Targets: targets, imageMap: make(map[string]bool)}
@@ -36,7 +31,7 @@ func New(k8s *kubernetes.KubeClient, triv *trivy.Trivy) *Processor {
 
 func (p *Processor) ListenForPods() {
 	var informer cache.SharedIndexInformer
-	informer, err := p.K8s.StartPodInformer(internal.OperatorConfig.PodLabelSelector, cache.ResourceEventHandlerFuncs{
+	informer, err := p.K8s.StartPodInformer(OperatorConfig.PodLabelSelector, cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(old, new interface{}) {
 			oldPod := old.(*corev1.Pod)
 			newPod := new.(*corev1.Pod)
@@ -65,7 +60,7 @@ func (p *Processor) ListenForPods() {
 	p.runInformerAsync(informer)
 }
 
-func (p *Processor) ProcessAllPods(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
+func (p *Processor) ProcessAllPods(pods []libk8s.PodInfo, allImages []kubernetes.ImageInNamespace) {
 	p.executeScans(pods, allImages)
 }
 
@@ -97,7 +92,7 @@ func (p *Processor) scanPod(pod libk8s.PodInfo) {
 		}
 
 		for _, t := range p.Targets {
-			err = t.ProcessSbom(target.NewContext(sbom, container.Image, container, &pod))
+			err = t.ProcessSbom(NewContext(sbom, container.Image, container, &pod))
 			errOccurred = errOccurred || err != nil
 		}
 	}
@@ -107,22 +102,16 @@ func (p *Processor) scanPod(pod libk8s.PodInfo) {
 	}
 }
 
-func initTargets() []target.Target {
-	targets := make([]target.Target, 0)
+func initTargets() []Target {
+	targets := make([]Target, 0)
 
-	var err error
-
-	t := devguard.NewDevGuardTarget(internal.OperatorConfig.DevGuardToken, internal.OperatorConfig.DevGuardApiURL, internal.OperatorConfig.DevGuardProjectID, nil)
+	t := NewDevGuardTarget(OperatorConfig.DevGuardToken, OperatorConfig.DevGuardApiURL, OperatorConfig.DevGuardProjectID, nil)
 	targets = append(targets, t)
-
-	if err != nil {
-		panic(err)
-	}
 
 	return targets
 }
 
-func (p *Processor) executeScans(pods []libk8s.PodInfo, allImages []target.ImageInNamespace) {
+func (p *Processor) executeScans(pods []libk8s.PodInfo, allImages []kubernetes.ImageInNamespace) {
 	for _, pod := range pods {
 		p.scanPod(pod)
 	}
@@ -135,8 +124,9 @@ func (p *Processor) executeScans(pods []libk8s.PodInfo, allImages []target.Image
 			continue
 		}
 
-		removableImages := make([]target.ImageInNamespace, 0)
+		removableImages := make([]kubernetes.ImageInNamespace, 0)
 		for _, t := range targetImages {
+			slog.Debug("Checking image for removal", "image", t.String())
 			if !containsImage(allImages, t) {
 				removableImages = append(removableImages, t)
 				delete(p.imageMap, t.String())
@@ -169,7 +159,7 @@ func getChangedContainers(oldPod, newPod libk8s.PodInfo) ([]*libk8s.ContainerInf
 	return addedContainers, removedContainers
 }
 
-func containsImage(images []target.ImageInNamespace, image target.ImageInNamespace) bool {
+func containsImage(images []kubernetes.ImageInNamespace, image kubernetes.ImageInNamespace) bool {
 	for _, i := range images {
 		if i.String() == image.String() {
 			return true
@@ -190,7 +180,7 @@ func containsContainerImage(containers []*libk8s.ContainerInfo, image string) bo
 }
 
 func (p *Processor) cleanupImagesIfNeeded(namespace string, removedContainers []*libk8s.ContainerInfo, allPods []interface{}) {
-	images := make([]target.ImageInNamespace, 0)
+	images := make([]kubernetes.ImageInNamespace, 0)
 
 	for _, c := range removedContainers {
 		found := false
@@ -201,7 +191,7 @@ func (p *Processor) cleanupImagesIfNeeded(namespace string, removedContainers []
 		}
 
 		if !found {
-			imageWithNamespace := target.ImageInNamespace{Namespace: namespace, Image: c.Image}
+			imageWithNamespace := kubernetes.ImageInNamespace{Namespace: namespace, Image: c.Image}
 			images = append(images, imageWithNamespace)
 			delete(p.imageMap, imageWithNamespace.String())
 
@@ -259,7 +249,7 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 		slog.Info("Finished cache sync")
 		pods := informer.GetStore().List()
 		missingPods := make([]libk8s.PodInfo, 0)
-		allImages := make([]target.ImageInNamespace, 0)
+		allImages := make([]kubernetes.ImageInNamespace, 0)
 
 		for _, t := range p.Targets {
 			targetImages, err := t.LoadImages()
@@ -274,8 +264,8 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 				slog.Debug("Pod found", "pod", pod.Name, "namespace", pod.Namespace)
 				info := p.K8s.Client.ExtractPodInfos(*pod)
 				for _, c := range info.Containers {
-					allImages = append(allImages, target.ImageInNamespace{Namespace: info.PodNamespace, Image: c.Image})
-					if !containsImage(targetImages, target.ImageInNamespace{
+					allImages = append(allImages, kubernetes.ImageInNamespace{Namespace: info.PodNamespace, Image: c.Image})
+					if !containsImage(targetImages, kubernetes.ImageInNamespace{
 						Image:     c.Image,
 						Namespace: info.PodNamespace,
 					}) {
@@ -285,11 +275,30 @@ func (p *Processor) runInformerAsync(informer cache.SharedIndexInformer) {
 					}
 				}
 			}
+
+			// check for images which need to be deleted
+			removableImages := make([]kubernetes.ImageInNamespace, 0)
+			for _, t := range targetImages {
+				slog.Debug("Checking image for removal", "image", t.String())
+				if !containsImage(allImages, t) {
+					removableImages = append(removableImages, t)
+					delete(p.imageMap, t.String())
+
+					slog.Debug("Image marked for removal", "image", t.String())
+				}
+			}
+
+			if len(removableImages) > 0 {
+				slog.Info("Remove images from target", "amount", len(removableImages))
+				t.Remove(removableImages)
+			}
 		}
 
 		if len(missingPods) > 0 {
 			slog.Info("Execute initial scans on missing pods", "amount", len(missingPods))
 			p.executeScans(missingPods, allImages)
 		}
+
+		slog.Info("Finished initial scan")
 	}()
 }
