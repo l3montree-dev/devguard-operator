@@ -121,7 +121,6 @@ func (t *Trivy) ExecuteTrivy(img *oci.RegistryImage) (string, error) {
 
 	cmd := exec.CommandContext(context.Background(),
 		"trivy", "image",
-		"--quiet",
 		"--format", "cyclonedx",
 		"--output", sbomFile.Name(),
 		"--input", tmpDir,
