@@ -12,8 +12,13 @@ import (
 	"time"
 
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/gosimple/slug"
 	"github.com/l3montree-dev/devguard-operator/kubernetes"
+	"github.com/pkg/errors"
+	"oras.land/oras-go/v2"
+	orasOci "oras.land/oras-go/v2/content/oci"
+	"oras.land/oras-go/v2/registry/remote"
+	"oras.land/oras-go/v2/registry/remote/auth"
+	"oras.land/oras-go/v2/registry/remote/retry"
 )
 
 type Trivy struct {
@@ -35,9 +40,51 @@ func (t Trivy) WithTrivyVersion(version string) Trivy {
 	return t
 }
 
+func (t Trivy) downloadImageToLocalFilesystem(img *oci.RegistryImage) (string, error) {
+	// Convert credentials if needed (these can be used via Docker login or environment).
+	credentials := oci.ConvertSecrets(*img, t.proxyRegistryMap)
+	// use oras to download the image
+	tmpDir, err := os.MkdirTemp("", "oras")
+
+	if err != nil {
+		return "", errors.Wrap(err, "could not create temp directory")
+	}
+
+	store, err := orasOci.New(tmpDir)
+
+	if err != nil {
+		return "", errors.Wrap(err, "could not create OCI layout store")
+	}
+
+	ctx := context.Background()
+
+	repoName, tag := getRepoWithVersion(img)
+	repo, err := remote.NewRepository(repoName)
+	if err != nil {
+		return "", errors.Wrap(err, "could not create remote repository")
+	}
+	if len(credentials) > 0 {
+		repo.Client = &auth.Client{
+			Client: retry.DefaultClient,
+			Cache:  auth.NewCache(),
+			Credential: auth.StaticCredential(credentials[0].Authority, auth.Credential{
+				Username: credentials[0].Username,
+				Password: credentials[0].Password,
+			}),
+		}
+	}
+
+	_, err = oras.Copy(ctx, repo, tag, store, tag, oras.DefaultCopyOptions)
+	if err != nil {
+		return "", errors.Wrap(err, "could not copy image")
+	}
+
+	return tmpDir, nil
+}
+
 // ExecuteTrivy scans the provided image with Trivy and returns its CycloneDX SBOM.
 func (t *Trivy) ExecuteTrivy(img *oci.RegistryImage) (string, error) {
-	slog.Info("Executing Trivy", "image", img.Image)
+	slog.Info("executing Trivy", "image", img.Image)
 
 	originalImage := img.Image
 	originalImageID := img.ImageID
@@ -55,26 +102,29 @@ func (t *Trivy) ExecuteTrivy(img *oci.RegistryImage) (string, error) {
 
 	now := time.Now()
 
-	// Convert credentials if needed (these can be used via Docker login or environment).
-	_ = oci.ConvertSecrets(*img, t.proxyRegistryMap)
+	// Download the image to the local filesystem.
+	tmpDir, err := t.downloadImageToLocalFilesystem(img)
+	if err != nil {
+		return "", fmt.Errorf("could not download image: %w", err)
+	}
+
+	defer os.RemoveAll(tmpDir)
 
 	// Invoke Trivy in CycloneDX format directly, writing SBOM to stdout.
 	var stdout, stderr bytes.Buffer
 
 	// create a tmp file
-	tmpFile, err := os.CreateTemp("", slug.Make(img.Image))
+	sbomFile, err := os.Create(tmpDir + "/sbom.json")
 	if err != nil {
 		return "", fmt.Errorf("could not create temp file: %w", err)
 	}
-
-	defer os.Remove(tmpFile.Name())
 
 	cmd := exec.CommandContext(context.Background(),
 		"trivy", "image",
 		"--quiet",
 		"--format", "cyclonedx",
-		"--output", tmpFile.Name(),
-		img.Image,
+		"--output", sbomFile.Name(),
+		"--input", tmpDir,
 	)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -87,7 +137,7 @@ func (t *Trivy) ExecuteTrivy(img *oci.RegistryImage) (string, error) {
 	slog.Info("Trivy execution completed", "duration", time.Since(now).String(), "image", img.Image)
 
 	// Read the SBOM from the temp file
-	sbom, err := os.ReadFile(tmpFile.Name())
+	sbom, err := os.ReadFile(sbomFile.Name())
 	if err != nil {
 		return "", fmt.Errorf("could not read temp file: %w", err)
 	}
