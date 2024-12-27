@@ -10,7 +10,7 @@ RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/
 COPY . .
 
 # build the scanner
-RUN CGO_ENABLED=0 go build -o devguard-operator main.go
+RUN CGO_ENABLED=0 go build -o devguard-operator .
 
 FROM scratch
 
