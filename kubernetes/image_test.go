@@ -4,7 +4,8 @@ import (
 	"testing"
 
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/l3montree-dev/devguard-operator/internal/kubernetes"
+	"github.com/l3montree-dev/devguard-operator/kubernetes"
+
 	"github.com/stretchr/testify/assert"
 )
 

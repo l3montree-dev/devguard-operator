@@ -44,7 +44,7 @@ func ApplyProxyRegistry(img *oci.RegistryImage, log bool, registryProxyMap map[s
 			img.Image = strings.ReplaceAll(img.Image, registryToReplace, proxyRegistry)
 
 			if log {
-				slog.Debug("Applied Registry-Proxy %s", img.ImageID)
+				slog.Debug("Applied Registry-Proxy", "image", img.ImageID)
 			}
 
 			break
