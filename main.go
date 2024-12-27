@@ -88,9 +88,6 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().String(ConfigDevGuardApiURL, "", "DevGuard Api URL")
 	rootCmd.PersistentFlags().String(ConfigDevGuardProjectName, "", "DevGuard Project Name (eg. l3montree-cybersecurity/projects/devguard)")
 
-	rootCmd.MarkPersistentFlagRequired(ConfigDevGuardToken)
-	rootCmd.MarkPersistentFlagRequired(ConfigDevGuardProjectName)
-
 	return rootCmd
 }
 

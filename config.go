@@ -12,9 +12,9 @@ type Config struct {
 	RegistryProxies    []string `yaml:"registryProxy" env:"SBOM_REGISTRY_PROXY" flag:"registryProxy"`
 	Verbosity          string   `env:"SBOM_VERBOSITY" flag:"verbosity"`
 
-	DevGuardToken     string `yaml:"devGuardToken" env:"DEVGUARD_TOKEN" flag:"token"`
-	DevGuardApiURL    string `yaml:"devGuardApiURL" env:"DEVGUARD_API_URL" flag:"apiUrl"`
-	DevGuardProjectID string `yaml:"devGuardProjectID" env:"DEVGUARD_PROJECT_ID" flag:"projectName"`
+	DevGuardToken       string `yaml:"devGuardToken" env:"DEVGUARD_TOKEN" flag:"token"`
+	DevGuardApiURL      string `yaml:"devGuardApiURL" env:"DEVGUARD_API_URL" flag:"apiUrl"`
+	DevGuardProjectName string `yaml:"devGuardProjectID" env:"DEVGUARD_PROJECT_NAME" flag:"projectName"`
 }
 
 var (
