@@ -419,104 +419,94 @@ func (g *DevGuardTarget) ProcessSbom(ctx *TargetContext) error {
 }
 
 func (g *DevGuardTarget) Remove(images []kubernetes.ImageInNamespace) error {
+
+	wg := sync.WaitGroup{}
+
 	for _, img := range images {
-		name, _ := getRepoWithVersion(img.Image)
+		wg.Add(1)
+		go func(img kubernetes.ImageInNamespace) {
+			defer wg.Done()
 
-		projectSlug := slug.Make(img.Namespace)
-		assetSlug := slug.Make(name)
+			name, _ := getRepoWithVersion(img.Image)
 
-		slog.Info("Deleting asset", "projectSlug", projectSlug, "assetSlug", assetSlug)
-	}
-	return nil
-	/*
-			wg := sync.WaitGroup{}
+			projectSlug := slug.Make(img.Namespace)
+			assetSlug := slug.Make(name)
 
-			for _, img := range images {
-				wg.Add(1)
-				go func(img kubernetes.ImageInNamespace) {
-					defer wg.Done()
-
-					name, _ := getRepoWithVersion(img.Image)
-
-					projectSlug := slug.Make(img.Namespace)
-					assetSlug := slug.Make(name)
-
-					req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/%s/", g.organizationSlug, projectSlug, assetSlug), nil)
-					if err != nil {
-						slog.Error("could not delete asset", "err", err)
-						return
-					}
-
-					slog.Info("Deleting asset", "projectSlug", projectSlug, "assetSlug", assetSlug)
-
-					req.Header.Set("Content-Type", "application/json")
-					_, err = g.client.Do(req)
-					if err != nil {
-						slog.Error("could not delete asset", "err", err)
-						return
-					}
-				}(img)
+			req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/%s/", g.organizationSlug, projectSlug, assetSlug), nil)
+			if err != nil {
+				slog.Error("could not delete asset", "err", err)
+				return
 			}
 
+			slog.Info("Deleting asset", "projectSlug", projectSlug, "assetSlug", assetSlug)
 
-		wg.Wait()
+			req.Header.Set("Content-Type", "application/json")
+			_, err = g.client.Do(req)
+			if err != nil {
+				slog.Error("could not delete asset", "err", err)
+				return
+			}
+		}(img)
+	}
 
-		// check if there are empty projects now. We can archive those too
-		namespaces := map[string]bool{}
-		for _, img := range images {
-			namespaces[img.Namespace] = true
-		}
+	wg.Wait()
 
-		wg = sync.WaitGroup{}
-		// fetch all assets of those projects.
-		// if empty, archive the project
-		for namespace := range namespaces {
-			wg.Add(1)
-			go func(namespace string) {
-				defer wg.Done()
-				projectSlug := slug.Make(namespace)
+	// check if there are empty projects now. We can archive those too
+	namespaces := map[string]bool{}
+	for _, img := range images {
+		namespaces[img.Namespace] = true
+	}
 
-				req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/", g.organizationSlug, projectSlug), nil)
+	wg = sync.WaitGroup{}
+	// fetch all assets of those projects.
+	// if empty, archive the project
+	for namespace := range namespaces {
+		wg.Add(1)
+		go func(namespace string) {
+			defer wg.Done()
+			projectSlug := slug.Make(namespace)
+
+			req, err := http.NewRequest("GET", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/assets/", g.organizationSlug, projectSlug), nil)
+			if err != nil {
+				slog.Error("Could not fetch assets", "err", err)
+				return
+			}
+
+			resp, err := g.client.Do(req)
+			if err != nil {
+				slog.Error("Could not fetch assets", "err", err)
+				return
+			}
+
+			var assets []map[string]interface{}
+			err = json.NewDecoder(resp.Body).Decode(&assets)
+			if err != nil {
+				slog.Error("Could not fetch assets", "err", err)
+				return
+			}
+
+			if len(assets) == 0 {
+				req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, projectSlug), nil)
 				if err != nil {
-					slog.Error("Could not fetch assets", "err", err)
+					slog.Error("Could not delete project", "err", err)
 					return
 				}
 
-				resp, err := g.client.Do(req)
+				req.Header.Set("Content-Type", "application/json")
+				_, err = g.client.Do(req)
 				if err != nil {
-					slog.Error("Could not fetch assets", "err", err)
+					slog.Error("Could not delete project", "err", err)
 					return
 				}
 
-				var assets []map[string]interface{}
-				err = json.NewDecoder(resp.Body).Decode(&assets)
-				if err != nil {
-					slog.Error("Could not fetch assets", "err", err)
-					return
-				}
+				slog.Info("Deleted project", "projectSlug", projectSlug)
+			}
+		}(namespace)
+	}
 
-				if len(assets) == 0 {
-					req, err := http.NewRequest("DELETE", fmt.Sprintf("/api/v1/organizations/%s/projects/%s/", g.organizationSlug, projectSlug), nil)
-					if err != nil {
-						slog.Error("Could not delete project", "err", err)
-						return
-					}
+	wg.Wait()
+	return nil
 
-					req.Header.Set("Content-Type", "application/json")
-					_, err = g.client.Do(req)
-					if err != nil {
-						slog.Error("Could not delete project", "err", err)
-						return
-					}
-
-					slog.Info("Deleted project", "projectSlug", projectSlug)
-				}
-			}(namespace)
-		}
-
-		wg.Wait()
-		return nil
-	*/
 }
 
 func getNameAndVersionFromString(input string, delimiter string) (string, string) {
