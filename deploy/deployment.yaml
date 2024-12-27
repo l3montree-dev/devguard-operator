@@ -32,7 +32,7 @@ spec:
           - name: DEVGUARD_PROJECT_NAME
             value: "devguard-operator"
         ports:
-        - containerPort: 8080
+        - containerPort: 8081
           name: http
           protocol: TCP
         securityContext:
@@ -61,12 +61,12 @@ spec:
           timeoutSeconds: 3
           httpGet:
             path: "/health"
-            port: 8080
+            port: 8081
         readinessProbe:
           timeoutSeconds: 3
           httpGet:
             path: "/health"
-            port: 8080
+            port: 8081
       volumes:
         - name: work
           emptyDir: {}
