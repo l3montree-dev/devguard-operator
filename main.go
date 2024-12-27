@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/ckotzbauer/libstandard"
-	"github.com/ckotzbauer/sbom-operator/internal"
-	"github.com/ckotzbauer/sbom-operator/internal/daemon"
-	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
-	"github.com/ckotzbauer/sbom-operator/internal/processor"
-	"github.com/ckotzbauer/sbom-operator/internal/trivy"
+	"github.com/l3montree-dev/devguard-operator/internal"
+	"github.com/l3montree-dev/devguard-operator/internal/daemon"
+	"github.com/l3montree-dev/devguard-operator/internal/kubernetes"
+	"github.com/l3montree-dev/devguard-operator/internal/processor"
+	"github.com/l3montree-dev/devguard-operator/internal/trivy"
 
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"

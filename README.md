@@ -3,7 +3,7 @@
 
 > Catalogue all images of a Kubernetes cluster to multiple targets with Syft.
 
-[![test](https://github.com/ckotzbauer/sbom-operator/actions/workflows/test.yml/badge.svg)](https://github.com/ckotzbauer/sbom-operator/actions/workflows/test.yml)
+[![test](https://github.com/l3montree-dev/devguard-operator/actions/workflows/test.yml/badge.svg)](https://github.com/l3montree-dev/devguard-operator/actions/workflows/test.yml)
 
 ## Overview
 
@@ -341,9 +341,9 @@ COSIGN_REPOSITORY=ghcr.io/ckotzbauer/sbom-operator-metadata cosign download sbom
 ```
 
 
-[License](https://github.com/ckotzbauer/sbom-operator/blob/master/LICENSE)
+[License](https://github.com/l3montree-dev/devguard-operator/blob/master/LICENSE)
 --------
-[Changelog](https://github.com/ckotzbauer/sbom-operator/blob/master/CHANGELOG.md)
+[Changelog](https://github.com/l3montree-dev/devguard-operator/blob/master/CHANGELOG.md)
 --------
 
 

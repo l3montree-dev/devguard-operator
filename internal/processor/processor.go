@@ -9,12 +9,12 @@ import (
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/ckotzbauer/sbom-operator/internal"
-	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
-	"github.com/ckotzbauer/sbom-operator/internal/trivy"
+	"github.com/l3montree-dev/devguard-operator/internal"
+	"github.com/l3montree-dev/devguard-operator/internal/kubernetes"
+	"github.com/l3montree-dev/devguard-operator/internal/trivy"
 
-	"github.com/ckotzbauer/sbom-operator/internal/target"
-	"github.com/ckotzbauer/sbom-operator/internal/target/devguard"
+	"github.com/l3montree-dev/devguard-operator/internal/target"
+	"github.com/l3montree-dev/devguard-operator/internal/target/devguard"
 
 	"k8s.io/client-go/tools/cache"
 

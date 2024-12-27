@@ -1,4 +1,4 @@
-module github.com/ckotzbauer/sbom-operator
+module github.com/l3montree-dev/devguard-operator
 
 go 1.23.4
 

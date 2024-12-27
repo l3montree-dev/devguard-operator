@@ -15,7 +15,7 @@ import (
 
 	libk8s "github.com/ckotzbauer/libk8soci/pkg/kubernetes"
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/ckotzbauer/sbom-operator/internal/target"
+	"github.com/l3montree-dev/devguard-operator/internal/target"
 )
 
 type KubeClient struct {

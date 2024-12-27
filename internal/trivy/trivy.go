@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/ckotzbauer/libk8soci/pkg/oci"
-	"github.com/ckotzbauer/sbom-operator/internal/kubernetes"
 	"github.com/gosimple/slug"
+	"github.com/l3montree-dev/devguard-operator/internal/kubernetes"
 )
 
 type Trivy struct {
