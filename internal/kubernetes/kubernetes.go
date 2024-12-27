@@ -27,8 +27,8 @@ type KubeClient struct {
 var (
 	AnnotationTemplate = "devguard.org/%s"
 	/* #nosec */
-	jobSecretName       = "sbom-operator-job-config"
-	JobName             = "sbom-operator-job"
+	jobSecretName       = "devguard-operator-job-config"
+	JobName             = "devguard-operator-job"
 	updatePodMaxRetries = 3
 )
 
@@ -286,7 +286,7 @@ func (client *KubeClient) CreateConfigMap(namespace, name, imageId string, data 
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"ckotzbauer.sbom-operator.io": "true",
+				"devguard.org": "true",
 			},
 			Annotations: map[string]string{
 				fmt.Sprintf(AnnotationTemplate, "image-id"): imageId,
