@@ -12,7 +12,7 @@ COPY . .
 # build the scanner
 RUN CGO_ENABLED=0 go build -buildvcs=false -o devguard-operator .
 
-FROM scratch
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=golang-builder /app/devguard-operator /usr/local/bin/devguard-operator
 COPY --from=golang-builder /usr/local/bin/trivy /usr/local/bin/trivy
