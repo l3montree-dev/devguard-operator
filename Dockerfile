@@ -17,4 +17,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=golang-builder /app/devguard-operator /usr/local/bin/devguard-operator
 COPY --from=golang-builder /usr/local/bin/trivy /usr/local/bin/trivy
 
+WORKDIR /usr/local/bin
+
+COPY trivy.yaml /usr/local/bin/trivy.yaml
+
 CMD ["/usr/local/bin/devguard-operator"]

@@ -6,12 +6,12 @@ require (
 	github.com/ckotzbauer/libk8soci v0.0.0-20240810135526-c1ac5a827c6b
 	github.com/ckotzbauer/libstandard v0.0.0-20240714072944-bb20d4a8e76a
 	github.com/gosimple/slug v1.14.0
-	github.com/l3montree-dev/devguard v0.5.14
+	github.com/l3montree-dev/devguard v0.5.15
 	github.com/lmittmann/tint v1.0.5
 	github.com/novln/docker-parser v1.0.0
 	github.com/robfig/cron v1.2.0
 	github.com/spf13/cobra v1.8.1
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	k8s.io/api v0.31.0
 	k8s.io/apimachinery v0.31.0
 	k8s.io/client-go v0.31.0
@@ -20,7 +20,7 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/CycloneDX/cyclonedx-go v0.9.0 // indirect
+	github.com/CycloneDX/cyclonedx-go v0.9.2 // indirect
 	github.com/anchore/go-logger v0.0.0-20230725134548-c21dafa1ec5a // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/becheran/wildmatch-go v1.0.0 // indirect
@@ -86,7 +86,7 @@ require (
 	github.com/ory/client-go v1.11.7 // indirect
 	github.com/package-url/packageurl-go v0.1.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.19 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pkg/errors v0.9.1
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/scylladb/go-set v1.0.3-0.20200225121959-cc7b2070d91e // indirect
