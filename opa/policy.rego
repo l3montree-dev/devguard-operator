@@ -26,7 +26,7 @@ deny[{"msg": msg }] if {
         # Make an HTTP GET request (experimental!). Replace with your actual endpoint.
         resp := http.send({
             "method": "GET",
-            "url": sprintf("https://api.main.devguard.org/verify-supply-chain?supplyChainOutputDigest=%s", [sha]),
+            "url": sprintf("https://api.main.devguard.org/verify-supply-chain?digest=%s", [sha]),
         })
 
         # You can check resp.body or resp.status as needed
